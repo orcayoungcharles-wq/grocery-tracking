@@ -1,0 +1,14 @@
+data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv/
+venv/
+*.tmp
+.DS_Store
+.streamlit/secrets.toml
+*.bak
+.grok/
