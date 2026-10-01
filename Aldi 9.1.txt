@@ -1,0 +1,65 @@
+ALDI
+Store #025
+5505 Ridge Ave
+Cincinnati
+https://help.aldi.us
+593037 Arizona Big Can           5.34 FB
+6 x  0.89
+565534 Paper Bags                0.56 NB
+4 x  0.14
+466810 Chicken Noodle            6.76 FA
+4 x  1.69
+733530 Campbell's Soup           4.96 FA
+2 x  2.48
+733540 Campbell's Soup           4.96 FA
+2 x  2.48
+576717 RTS Rice                  2.58 FA
+2 x  1.29
+576712 RTS Rice                  2.58 FA
+2 x  1.29
+651744 Ready Rice                3.56 FA
+4 x  0.89
+400739 12 oz Hot Dogs            1.98 FA
+2 x  0.99
+481342 Hot Dog Buns              2.78 FA
+2 x  1.39
+383324 Flour Tortillas           1.95 FA
+399942 Deli Sliced Turkey        9.57 FA
+3 x  3.19
+383210 Baby Swiss Slices         3.49 FA
+398792 Premium Sausage           5.78 FA
+2 x  2.89
+399338 Thick Cut Bacon           7.90 FA
+2 x  3.95
+270039 Hash Brown Patties        4.99 FA
+382931 Sour Cream                1.75 FA
+343665 Skyline Chili             5.95 FA
+367839 Lasagna 38oz              5.99 FA
+716326 Spicy Marg or Pine        1.59 FA
+488858 Jumbo Blueberries         4.59 FA
+371531 Pretzel Sticks/Mini       2.19 FA
+416943 Whole Milk                2.71 FA
+382251 Yellow Mustard 20oz       0.99 FA
+282819 36 oz. Ketchup            1.95 FA
+SUBTOTAL                        97.45
+B:Taxable @7.800%                0.46
+A:Taxable @0.00%                 0.00
+AMOUNT DUE                      97.91
+T O T A L                   $ 97.91
+49 ITEMS
+Debit Card
+*5156 F507/005/802 09/01/26 01:55PM
+
+Sign up for ALDI emails
+for a sneak peek on the weekly ad!
+http://www.aldi.us/signup
+97.91
+Debit
+********************6539 PIN
+09/01/26 13:55 Ref/Seq # 132785
+Trace # 132785
+Auth # 931116
+AID A0000000042203
+TVR 0000000000
+IAD 0110A00012200000000000000000
+EntryMode 07
