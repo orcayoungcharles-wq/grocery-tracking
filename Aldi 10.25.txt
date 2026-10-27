@@ -1,0 +1,48 @@
+ALDI
+Store #025
+5505 Ridge Ave
+Cincinnati
+https://help.aldi.us
+388137 Large Eggs                2.74 FA
+2 x  1.37
+471181 45 Cal Wheat Bread        2.59 FA
+423910 Butter Quarters           2.89 FA
+383324 Flour Tortillas           1.95 FA
+384967 Vitamin B & Melato        7.69 NB
+343464 Chili with Beans          3.98 FA
+2 x  1.99
+398792 Premium Sausage           5.58 FA
+2 x  2.79
+576717 RTS Rice                  3.87 FA
+3 x  1.29
+382722 Amer Cheese Singles       1.85 FA
+400788 Uncured Beef Frank        4.75 FA
+399338 Thick Cut Bacon           3.95 FA
+366026 Org. Thin Pepperoni       2.99 FA
+704496 RC Chs or Pep             8.98 FA
+2 x  4.49
+399652 Essentials 100 oz         5.49 NB
+606517 Potato Chips              3.98 FA
+2 x  1.99
+SUBTOTAL                        63.28
+B-Taxable @7.800%                1.03
+A-Taxable @0.000%                0.00
+AMOUNT DUE                      64.31
+T O T A L                     $ 64.31
+22 ITEMS
+Credit/Debit                  $ 64.31
+*4720 F507/008/805 10/25/26 03:07PM
+
+Sign up for ALDI emails
+for a sneak peek on the weekly ad!
+http://www.aldi.us/signup
+Debit
+*********6593 PIN
+10/25/26 15:07 Ref/Seq # 178974
+Trace # 178974
+Auth # 405037
+AID A0000000042203
+TVR 0000040001
+IAD 0110A04001220000000000000000000000
+EntryMode 07
+++APPROVED++

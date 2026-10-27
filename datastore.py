@@ -278,3 +278,70 @@ def reset_data():
         if filepath.exists():
             filepath.unlink()
     print("All data deleted.")
+
+
+def export_bundle() -> dict:
+    """Return a single JSON-serializable bundle of all persisted data."""
+    return {
+        "version": 1,
+        "receipts": load_receipts(),
+        "monthly_spending": load_monthly_spending(),
+        "item_history": load_item_history(),
+    }
+
+
+def import_bundle(bundle: dict, mode: str = "replace") -> int:
+    """
+    Restore from an export_bundle() dict.
+    mode='replace' overwrites everything; mode='merge' appends receipts
+    whose trip_id / filename is not already present.
+    Returns number of receipts after import.
+    """
+    if not isinstance(bundle, dict) or "receipts" not in bundle:
+        raise ValueError("Invalid backup: missing receipts")
+
+    incoming = bundle.get("receipts") or []
+    if mode == "replace":
+        save_receipts([])
+        _save_json(SPENDING_FILE, {})
+        _save_json(ITEM_HISTORY_FILE, [])
+        for r in incoming:
+            add_receipt(r)
+    else:
+        existing = {r.get("trip_id") or r.get("filename") for r in load_receipts()}
+        for r in incoming:
+            key = r.get("trip_id") or r.get("filename")
+            if key in existing:
+                continue
+            add_receipt(r)
+            existing.add(key)
+    return len(load_receipts())
+
+
+def get_weekly_spending():
+    """
+    Aggregate food spend by ISO week (YYYY-Www).
+    Returns ordered dict {week_key: {"food": float, "by_store": {store: float}, "trips": int}}.
+    """
+    from collections import defaultdict
+    from datetime import datetime as dt
+
+    receipts = load_receipts()
+    weeks: dict = defaultdict(lambda: {"food": 0.0, "by_store": {}, "trips": 0})
+
+    for r in receipts:
+        try:
+            d = dt.strptime(r["date"], "%Y-%m-%d").date()
+        except (KeyError, ValueError):
+            continue
+        iso = d.isocalendar()  # year, week, weekday
+        key = f"{iso.year}-W{iso.week:02d}"
+        food = sum(i["line_total"] for i in r.get("items", []) if i.get("is_food", True))
+        store = r.get("store", "unknown")
+        weeks[key]["food"] = round(weeks[key]["food"] + food, 2)
+        weeks[key]["by_store"][store] = round(
+            weeks[key]["by_store"].get(store, 0.0) + food, 2
+        )
+        weeks[key]["trips"] += 1
+
+    return dict(sorted(weeks.items()))

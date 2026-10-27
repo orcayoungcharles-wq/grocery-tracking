@@ -4,7 +4,7 @@ Personal Aldi + Kroger receipt tracker: parse text receipts → food-only monthl
 
 ## Status
 
-Working end-to-end on the six sample receipts (2 Aldi, 4 Kroger).
+Working end-to-end on sample receipts (Aldi + Kroger). Dashboard supports **weekly** and monthly views. Use the **Backup** page to export/import JSON so data survives Streamlit Cloud restarts (\`data/\` is gitignored and ephemeral on Cloud).
 
 | Layer | Status |
 |-------|--------|

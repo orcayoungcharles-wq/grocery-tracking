@@ -64,16 +64,20 @@ def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
             "is_food": n["is_food"],
         })
 
-    # Date from filename if possible, else today
+    # Prefer printed date on the receipt body (MM/DD/YY), else filename MM.DD / MM-DD
     import re
     from datetime import date
-    m = re.search(r"(\d{1,2})[._-](\d{1,2})", filename)
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})", text)
     if m:
-        month, day = int(m.group(1)), int(m.group(2))
-        year = date.today().year
-        receipt_date = f"{year}-{month:02d}-{day:02d}"
+        month, day, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        receipt_date = f"{2000 + yy}-{month:02d}-{day:02d}"
     else:
-        receipt_date = date.today().isoformat()
+        m = re.search(r"(\d{1,2})[._-](\d{1,2})", filename)
+        if m:
+            month, day = int(m.group(1)), int(m.group(2))
+            receipt_date = f"{date.today().year}-{month:02d}-{day:02d}"
+        else:
+            receipt_date = date.today().isoformat()
 
     return {
         "store": store,
@@ -103,11 +107,15 @@ def detect_store_from_name(name: str) -> str | None:
 st.sidebar.title("🛒 Grocery Tracker")
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard", "Shopping List", "Receipts", "Upload"],
+    ["Dashboard", "Shopping List", "Receipts", "Upload", "Backup"],
     label_visibility="collapsed",
 )
 
 st.sidebar.markdown("---")
+st.sidebar.caption(
+    "Data is stored in JSON under `data/`. "
+    "On Streamlit Cloud the filesystem resets on redeploy — use **Backup** to export/import."
+)
 if st.sidebar.button("Reset all data", type="secondary"):
     datastore.reset_data()
     st.sidebar.success("Data cleared.")
@@ -124,6 +132,7 @@ if page == "Dashboard":
     current = data["current_month"]
     previous = data["previous_month"]
     receipt_count = data["receipt_count"]
+    weekly = datastore.get_weekly_spending()
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Receipts stored", receipt_count)
@@ -137,9 +146,50 @@ if page == "Dashboard":
     col4.metric("Stores this month", ", ".join(f"{k}: ${v:.2f}" for k, v in stores.items()) or "—")
 
     st.markdown("---")
+    view = st.radio("View", ["Weekly", "Monthly"], horizontal=True, index=0)
 
-    if not spending:
+    if not spending and not weekly:
         st.info("No spending data yet. Upload receipts on the Upload page.")
+    elif view == "Weekly":
+        if not weekly:
+            st.info("No weekly data yet.")
+        else:
+            weeks = list(weekly.keys())
+            food_vals = [weekly[w].get("food", 0) for w in weeks]
+            fig = px.bar(
+                x=weeks,
+                y=food_vals,
+                labels={"x": "Week (ISO)", "y": "Food spend ($)"},
+                title="Weekly food spend",
+                text=[f"${v:.2f}" for v in food_vals],
+            )
+            fig.update_traces(textposition="outside")
+            fig.update_layout(yaxis_title="USD", xaxis_title="")
+            st.plotly_chart(fig, use_container_width=True)
+
+            rows = []
+            for week, payload in weekly.items():
+                for store, amount in payload.get("by_store", {}).items():
+                    rows.append({
+                        "week": week,
+                        "store": store,
+                        "amount": amount,
+                        "trips": payload.get("trips", 0),
+                    })
+            if rows:
+                fig2 = px.bar(
+                    rows,
+                    x="week",
+                    y="amount",
+                    color="store",
+                    barmode="group",
+                    title="Food spend by store (weekly)",
+                    labels={"amount": "USD", "week": ""},
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+            with st.expander("Raw weekly data"):
+                st.json(weekly)
     else:
         # Monthly food spend bar chart
         months = list(spending.keys())
@@ -155,7 +205,6 @@ if page == "Dashboard":
         fig.update_layout(yaxis_title="USD", xaxis_title="")
         st.plotly_chart(fig, use_container_width=True)
 
-        # By-store breakdown for each month
         rows = []
         for month, payload in spending.items():
             for store, amount in payload.get("by_store", {}).items():
@@ -268,51 +317,186 @@ elif page == "Receipts":
                 st.dataframe(rows, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
-# Upload
+# Upload (text, photo, PDF + Gemini OCR)
 # ---------------------------------------------------------------------------
 elif page == "Upload":
+    import ocr as ocr_mod
+
     st.title("Upload receipt")
-    st.caption("Upload OCR'd receipt text (.txt) or paste text. PDFs need OCR first.")
+    st.caption(
+        "Photo, PDF scan, or text. Images/PDFs are OCR'd with Gemini, then parsed. "
+        "Review the text before storing."
+    )
 
     store = st.selectbox("Store", ["aldi", "kroger"])
-    uploaded = st.file_uploader("Receipt text file", type=["txt"])
-    pasted = st.text_area("Or paste receipt text", height=200)
+    if ocr_mod.has_api_key():
+        st.success("Gemini API key found — photo/PDF OCR is available.", icon="✅")
+    else:
+        st.warning(
+            "No Gemini key yet. You can still paste text or upload .txt. "
+            "Add the key under **Streamlit Secrets**:\n\n"
+            "```toml\n[gemini]\napi_key = \"YOUR_KEY\"\n```",
+            icon="⚠️",
+        )
 
-    text = None
-    filename = "pasted.txt"
-    if uploaded is not None:
-        text = uploaded.read().decode("utf-8", errors="replace")
-        filename = uploaded.name
-        detected = detect_store_from_name(filename)
-        if detected and detected != store:
-            st.warning(f"Filename suggests store={detected}; you selected {store}.")
-    elif pasted.strip():
-        text = pasted
+    tab_file, tab_camera, tab_paste = st.tabs(["File", "Camera", "Paste text"])
 
-    if text and st.button("Parse & store", type="primary"):
-        try:
-            receipt = parse_uploaded_text(text, store, filename)
-            datastore.add_receipt(receipt)
-            st.success(
-                f"Stored {receipt['filename']}: {len(receipt['items'])} items, "
-                f"subtotal ${receipt['subtotal']:.2f}, "
-                f"reconciled={receipt['reconciled']}"
-            )
-            with st.expander("Parsed items"):
-                st.dataframe(
-                    [
-                        {
-                            "Name": it["name"],
-                            "Qty": it["qty"],
-                            "Line total": it["line_total"],
-                            "Food": "Yes" if it.get("is_food", True) else "No",
-                            "Key": it.get("item_key"),
-                        }
-                        for it in receipt["items"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+    raw_bytes: bytes | None = None
+    filename = "receipt.jpg"
+    text: str | None = None
+    source = None
+
+    with tab_file:
+        uploaded = st.file_uploader(
+            "Receipt file",
+            type=["txt", "jpg", "jpeg", "png", "webp", "pdf"],
+            key="upload_file",
+        )
+        if uploaded is not None:
+            filename = uploaded.name
+            detected = detect_store_from_name(filename)
+            if detected and detected != store:
+                st.warning(f"Filename suggests store={detected}; you selected {store}.")
+            data = uploaded.getvalue()
+            lower = filename.lower()
+            if lower.endswith(".txt"):
+                text = data.decode("utf-8", errors="replace")
+                source = "text"
+            else:
+                raw_bytes = data
+                source = "image"
+
+    with tab_camera:
+        cam = st.camera_input("Take a photo of the receipt")
+        if cam is not None:
+            raw_bytes = cam.getvalue()
+            filename = "camera.jpg"
+            source = "image"
+
+    with tab_paste:
+        pasted = st.text_area("Paste receipt text", height=220, key="paste_area")
+        if pasted.strip():
+            text = pasted
+            filename = "pasted.txt"
+            source = "text"
+
+    # OCR step for images / PDFs
+    if source == "image" and raw_bytes is not None:
+        if st.button("Run OCR", type="primary", key="run_ocr"):
+            if not ocr_mod.has_api_key():
+                st.error("Add a Gemini API key in Streamlit Secrets first.")
+            else:
+                with st.spinner("OCR in progress…"):
+                    try:
+                        text = ocr_mod.extract_text_from_bytes(raw_bytes, filename)
+                        st.session_state["ocr_text"] = text
+                        st.session_state["ocr_filename"] = filename
+                        st.success("OCR complete — review the text below.")
+                    except Exception as e:
+                        st.error(f"OCR failed: {e}")
+
+    if "ocr_text" in st.session_state and source == "image":
+        text = st.session_state["ocr_text"]
+        filename = st.session_state.get("ocr_filename", filename)
+
+    if text:
+        st.subheader("Receipt text")
+        edited = st.text_area(
+            "Edit if OCR missed something, then store",
+            value=text,
+            height=280,
+            key="final_text",
+        )
+        if st.button("Parse & store", type="primary", key="parse_store"):
+            try:
+                receipt = parse_uploaded_text(edited, store, filename)
+                datastore.add_receipt(receipt)
+                st.session_state.pop("ocr_text", None)
+                st.session_state.pop("ocr_filename", None)
+                food = sum(
+                    i["line_total"] for i in receipt["items"] if i.get("is_food", True)
                 )
-        except Exception as e:
-            st.error(f"Parse/store failed: {e}")
-            st.exception(e)
+                st.success(
+                    f"Stored {receipt['filename']}: {len(receipt['items'])} items, "
+                    f"food ${food:.2f}, subtotal ${receipt['subtotal']:.2f}, "
+                    f"reconciled={receipt['reconciled']}"
+                )
+                with st.expander("Parsed items"):
+                    st.dataframe(
+                        [
+                            {
+                                "Name": it["name"],
+                                "Qty": it["qty"],
+                                "Line total": it["line_total"],
+                                "Food": "Yes" if it.get("is_food", True) else "No",
+                                "Key": it.get("item_key"),
+                            }
+                            for it in receipt["items"]
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            except Exception as e:
+                st.error(f"Parse/store failed: {e}")
+                st.exception(e)
+
+
+# ---------------------------------------------------------------------------
+# Backup / restore (survives Streamlit Cloud restarts)
+# ---------------------------------------------------------------------------
+elif page == "Backup":
+    st.title("Backup & Restore")
+    st.markdown(
+        """
+Streamlit Community Cloud **wipes the filesystem** on every redeploy and often
+after idle timeouts. Use this page to keep a local copy of your data.
+
+1. Click **Download backup** after each shopping trip (or weekly).
+2. After a restart, upload that JSON file and choose **Replace** or **Merge**.
+"""
+    )
+
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.subheader("Export")
+        bundle = datastore.export_bundle()
+        import json
+        payload = json.dumps(bundle, indent=2, default=str)
+        st.download_button(
+            label=f"Download backup ({len(bundle.get('receipts', []))} receipts)",
+            data=payload,
+            file_name="grocery-tracker-backup.json",
+            mime="application/json",
+            type="primary",
+        )
+        st.caption("Includes receipts, monthly totals, and item history.")
+
+    with col_b:
+        st.subheader("Import")
+        up = st.file_uploader("Backup JSON", type=["json"])
+        mode = st.radio("Mode", ["replace", "merge"], horizontal=True,
+                        help="replace = wipe current data first; merge = add only new trip_ids")
+        if up is not None and st.button("Restore from backup", type="primary"):
+            try:
+                import json
+                bundle = json.loads(up.read().decode("utf-8"))
+                n = datastore.import_bundle(bundle, mode=mode)
+                st.success(f"Restored. Now storing {n} receipts.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Restore failed: {e}")
+                st.exception(e)
+
+    st.markdown("---")
+    st.subheader("Current store summary")
+    receipts = datastore.load_receipts()
+    if not receipts:
+        st.info("Nothing stored yet.")
+    else:
+        for r in sorted(receipts, key=lambda x: x.get("date", "")):
+            food = sum(i["line_total"] for i in r.get("items", []) if i.get("is_food", True))
+            st.write(
+                f"- **{r.get('date')}** · {r.get('store')} · "
+                f"food ${food:.2f} · `{r.get('filename')}`"
+            )

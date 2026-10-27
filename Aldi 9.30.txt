@@ -1,0 +1,65 @@
+ALDI
+Store #085
+1301 Monmouth Street
+Newport
+https://help.aldi.us
+565554 Paper Bags                0.42 NB
+3 x  0.14
+416943 Whole Milk                2.72 FA
+371237 12 pk Diet Cola           4.49 FB
+388120 100% Wheat Bread          1.95 FA
+481341 Hamburger Buns            1.45 FA
+262747 Bananas LRW               0.85 FA
+(G) 1.98 lb (T) 0.01 lb
+(N) 1.97 lb x 0.43/lb
+343512 50 ct. Party Cups         8.30 NB
+2 x  4.15
+343547 Bon Italia Pasta          1.15 FA
+466810 Chicken Noodle            3.38 FA
+2 x  1.69
+668231 Pot Pie/Steak Pot        11.94 FA
+6 x  1.99
+365249 Chicken Breast           15.54 FA
+6 x  2.59
+343275 75/25 Beef Patties       14.29 FA
+383210 Baby Swiss Slices        10.47 FA
+3 x  3.49
+399942 Deli Sliced Turkey       12.76 FA
+4 x  3.19
+454881 Ground Coffee             6.29 FA
+382722 Amer Cheese Singles       1.85 FA
+576715 RTS Rice                  3.87 FA
+3 x  1.29
+576712 RTS Rice                  3.87 FA
+3 x  1.29
+576700 Jasmine RTS Rice          2.58 FA
+2 x  1.29
+356392 Honeycrisp Apples         1.99 FA
+486816 Long Bronze Pasta         3.98 FA
+2 x  1.99
+547896 Coffee Cups               4.59 FA
+506517 Potato Chips              3.58 FA
+2 x  1.79
+342899 Cheese Crackers           3.79 FA
+747938 Apple Cider               3.99 FA
+SUBTOTAL                       130.09
+B-Taxable @6.000%                0.79
+A-Taxable @0.000%                0.00
+AMOUNT DUE                     130.88
+T O T A L                    $ 130.88
+51 ITEMS
+Credit/Debit                 $ 130.88
+*4491 F560/009/806 09/30/26 05:17PM
+
+Sign up for ALDI emails
+for a sneak peek on the weekly ad!
+http://www.aldi.us/signup
+Debit
+********************6593 PIN
+09/30/26 17:17 Ref/Seq # 678166
+Trace # 678166
+Auth # 066824
+AID A0000000042203
+TVR 0000040001
+IAD 0110A04001220000000000000000000000
+EntryMode 07
