@@ -86,24 +86,38 @@ def save_monthly_spending(spending):
     _save_json(SPENDING_FILE, spending)
 
 
+def _receipt_spend(receipt_data) -> float:
+    """Full amount paid: prefer stored total, else subtotal+tax, else sum of lines."""
+    if receipt_data.get("total") is not None:
+        return round(float(receipt_data["total"]), 2)
+    sub = float(receipt_data.get("subtotal") or 0)
+    tax = float(receipt_data.get("tax") or 0)
+    if sub or tax:
+        return round(sub + tax, 2)
+    return round(sum(float(i.get("line_total") or 0) for i in receipt_data.get("items", [])), 2)
+
+
 def update_spending(receipt_data):
-    """Add a receipt's food spend to the monthly totals."""
+    """Add a receipt's full spend (items + tax) to the monthly totals."""
     spending = load_monthly_spending()
-    
+
     date = datetime.fromisoformat(receipt_data["date"])
     month_key = "%d-%02d" % (date.year, date.month)
-    
+
     if month_key not in spending:
-        spending[month_key] = {"food": 0.0, "by_store": {}}
-    
-    food_total = sum(item["line_total"] for item in receipt_data["items"] if item.get("is_food", True))
+        spending[month_key] = {"total": 0.0, "by_store": {}}
+    # Migrate old "food" key if present
+    if "total" not in spending[month_key] and "food" in spending[month_key]:
+        spending[month_key]["total"] = spending[month_key].pop("food")
+
+    amount = _receipt_spend(receipt_data)
     store = receipt_data["store"]
-    
-    spending[month_key]["food"] = round(spending[month_key]["food"] + food_total, 2)
+
+    spending[month_key]["total"] = round(spending[month_key].get("total", 0.0) + amount, 2)
     spending[month_key]["by_store"][store] = round(
-        spending[month_key]["by_store"].get(store, 0.0) + food_total, 2
+        spending[month_key]["by_store"].get(store, 0.0) + amount, 2
     )
-    
+
     save_monthly_spending(spending)
 
 
@@ -118,10 +132,13 @@ def get_current_month_data():
     spending = get_monthly_spending()
     now = datetime.utcnow()
     current_key = "%d-%02d" % (now.year, now.month)
-    
+
     if current_key in spending:
-        return spending[current_key]
-    return {"food": 0.0, "by_store": {}}
+        d = spending[current_key]
+        if "total" not in d and "food" in d:
+            d = {**d, "total": d["food"]}
+        return d
+    return {"total": 0.0, "by_store": {}}
 
 
 def get_previous_month_data():
@@ -137,7 +154,7 @@ def get_previous_month_data():
         prev_year = now.year
     
     prev_key = "%d-%02d" % (prev_year, prev_month)
-    return spending.get(prev_key, {"food": 0.0, "by_store": {}})
+    return spending.get(prev_key, {"total": 0.0, "by_store": {}})
 
 
 # --- Item History ---
@@ -318,30 +335,91 @@ def import_bundle(bundle: dict, mode: str = "replace") -> int:
     return len(load_receipts())
 
 
-def get_weekly_spending():
+def get_weekly_spending(max_weeks: int | None = None):
     """
-    Aggregate food spend by ISO week (YYYY-Www).
-    Returns ordered dict {week_key: {"food": float, "by_store": {store: float}, "trips": int}}.
+    Aggregate full spend by ISO week.
+    Returns ordered dict keyed by ISO week id, each value:
+      {label, total, by_store, trips, week_start}
+    label looks like "Week of Oct 6".
+    If max_weeks is set, only the most recent N weeks are returned.
     """
     from collections import defaultdict
-    from datetime import datetime as dt
+    from datetime import datetime as dt, timedelta
 
     receipts = load_receipts()
-    weeks: dict = defaultdict(lambda: {"food": 0.0, "by_store": {}, "trips": 0})
+    weeks: dict = defaultdict(lambda: {"total": 0.0, "by_store": {}, "trips": 0, "week_start": None})
 
     for r in receipts:
         try:
             d = dt.strptime(r["date"], "%Y-%m-%d").date()
         except (KeyError, ValueError):
             continue
-        iso = d.isocalendar()  # year, week, weekday
+        iso = d.isocalendar()
         key = f"{iso.year}-W{iso.week:02d}"
-        food = sum(i["line_total"] for i in r.get("items", []) if i.get("is_food", True))
+        # Monday of that ISO week
+        week_start = d - timedelta(days=d.weekday())
+        amount = _receipt_spend(r)
         store = r.get("store", "unknown")
-        weeks[key]["food"] = round(weeks[key]["food"] + food, 2)
+        weeks[key]["total"] = round(weeks[key]["total"] + amount, 2)
         weeks[key]["by_store"][store] = round(
-            weeks[key]["by_store"].get(store, 0.0) + food, 2
+            weeks[key]["by_store"].get(store, 0.0) + amount, 2
         )
         weeks[key]["trips"] += 1
+        if weeks[key]["week_start"] is None or week_start < weeks[key]["week_start"]:
+            weeks[key]["week_start"] = week_start
 
-    return dict(sorted(weeks.items()))
+    ordered = dict(sorted(weeks.items()))
+    # Attach friendly labels
+    for key, payload in ordered.items():
+        ws = payload.get("week_start")
+        if ws:
+            payload["label"] = f"Week of {ws.strftime('%b')} {ws.day}"
+        else:
+            payload["label"] = key
+        # JSON-serializable
+        payload["week_start"] = ws.isoformat() if ws else None
+
+    if max_weeks is not None and max_weeks > 0:
+        keys = list(ordered.keys())[-max_weeks:]
+        ordered = {k: ordered[k] for k in keys}
+    return ordered
+
+
+def rebuild_derived():
+    """Recompute monthly spending and item history from stored receipts."""
+    receipts = load_receipts()
+    _save_json(SPENDING_FILE, {})
+    _save_json(ITEM_HISTORY_FILE, [])
+    # Temporarily clear receipts so add_receipt can re-append without duplicating
+    save_receipts([])
+    for r in receipts:
+        add_receipt(r)
+    return len(load_receipts())
+
+
+def delete_receipt(trip_id: str) -> bool:
+    """
+    Remove one receipt by trip_id (or filename stem) and rebuild derived data.
+    Returns True if something was removed.
+    """
+    receipts = load_receipts()
+    kept = []
+    removed = False
+    for r in receipts:
+        key = r.get("trip_id") or r.get("filename") or ""
+        # Also match stem without extension
+        stem = Path(str(key)).stem if key else ""
+        if key == trip_id or stem == trip_id or r.get("filename") == trip_id:
+            removed = True
+            continue
+        kept.append(r)
+    if not removed:
+        return False
+    save_receipts(kept)
+    # Rebuild from remaining
+    _save_json(SPENDING_FILE, {})
+    _save_json(ITEM_HISTORY_FILE, [])
+    save_receipts([])
+    for r in kept:
+        add_receipt(r)
+    return True
