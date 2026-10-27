@@ -16,7 +16,8 @@ from typing import List, Dict, Any, Tuple
 # Common Kroger receipt abbreviations → expanded form.
 # Applied as whole-token replacements (case-insensitive) before item_key.
 ABBREV_ALIASES: Dict[str, str] = {
-    "THB": "THB",           # keep as-is (usually bread brand/code)
+    # Size / diet markers
+    "THB": "THB",
     "LGE": "Large",
     "MED": "Medium",
     "SM": "Small",
@@ -26,6 +27,29 @@ ABBREV_ALIASES: Dict[str, str] = {
     "LT": "Lite",
     "1/EA": "Each",
     "EA": "Each",
+    # Product / brand shorthand (shared with aggregate.ALIAS_MAP)
+    "HASHBRN": "HASHBROWN",
+    "HASHBR": "HASHBROWN",
+    "WW": "WHOLE WHEAT",
+    "RT": "RTD",
+    "RTS": "READY TO SERVE",
+    "CHK": "CHICKEN",
+    "FR": "FRIED",
+    "RCE": "RICE",
+    "BRE": "BREAD",
+    "BREPC": "BREAD",
+    "BKRY": "BAKERY",
+    "CHO": "CHOCOLATE",
+    "CHIP": "CHIP",
+    "CK": "COOKIE",
+    "PRSL": "PRETZEL",
+    "PRO": "PROTEIN",
+    "SPSHRP": "SOFT PRETZEL SHARP",
+    "RL": "ROLL",
+    "STFR": "STOUFFER",
+    "HOTDOG": "HOT DOG",
+    "PATTIE": "PATTIE",
+    "PATTIES": "PATTIES",
 }
 
 def expand_abbreviations(name: str) -> str:

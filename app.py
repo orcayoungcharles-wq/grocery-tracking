@@ -13,6 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 import datastore
+import aggregate
 import aldi_parser_shim as aldi_parser
 import kroger_parser_shim as kroger_parser
 
@@ -23,33 +24,22 @@ st.set_page_config(
 )
 
 
-def make_item_key(name: str, sku=None, store: str = "kroger") -> str:
-    if store == "aldi" and sku:
-        return str(sku)
-    return name.strip().lower()
-
-
 def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
-    """Parse receipt text and return a dict for datastore.add_receipt."""
+    """Parse receipt text and return a dict for datastore.add_receipt.
+
+    Item identity uses aggregate.normalize_item:
+      - Aldi  → 6-digit SKU
+      - Kroger → alias-expanded uppercase name
+    is_food is re-checked against NON_FOOD_KEYWORDS so shampoo etc. stay out
+    of food spend even if the parser misses a tax flag.
+    """
+    store_upper = store.upper()
     if store == "aldi":
         result = aldi_parser.parse_receipt(text)
         items_raw = result.items
         subtotal = result.subtotal
         reconciles = result.reconciles
         tax = 0.0
-        normalized = []
-        for item in items_raw:
-            sku = getattr(item, "sku", None)
-            normalized.append({
-                "item_key": make_item_key(item.name, sku, "aldi"),
-                "name": item.name,
-                "sku": sku,
-                "qty": item.qty,
-                "unit_price": item.unit_price,
-                "line_total": item.line_total,
-                "tax_code": getattr(item, "tax_code", None),
-                "is_food": item.is_food,
-            })
     else:
         result = kroger_parser.parse_receipt(text)
         items_raw = result["items"]
@@ -59,11 +49,20 @@ def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
         if not tax and result.get("printed_balance") is not None:
             tax = round(result["printed_balance"] - subtotal, 2)
         tax = round(float(tax or 0), 2)
-        normalized = []
-        for item in items_raw:
-            d = dict(item)
-            d["item_key"] = make_item_key(d.get("name", ""), store="kroger")
-            normalized.append(d)
+
+    normalized = []
+    for item in items_raw:
+        n = aggregate.normalize_item(item, store_upper)
+        normalized.append({
+            "item_key": n["item_key"],
+            "name": n["display_name"],
+            "sku": n.get("sku"),
+            "qty": n["qty"],
+            "unit_price": n.get("unit_price"),
+            "line_total": n["line_total"],
+            "tax_code": n.get("tax_code"),
+            "is_food": n["is_food"],
+        })
 
     # Date from filename if possible, else today
     import re

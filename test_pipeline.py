@@ -8,6 +8,7 @@ from pathlib import Path
 import aldi_parser_shim as aldi_parser
 import kroger_parser_shim as kroger_parser
 import datastore
+import aggregate
 
 
 def find_receipts():
@@ -50,30 +51,22 @@ def parse_receipt(fname, store):
             bal = result.get('printed_balance')
             tax = round((bal or 0) - subtotal, 2) if bal is not None else 0.0
         tax = round(float(tax or 0), 2)
-    # Normalize items to uniform dicts with item_key
+    # Normalize via aggregate (SKU for Aldi, alias-expanded key for Kroger,
+    # NON_FOOD_KEYWORDS re-check for shampoo etc.)
+    store_upper = store.upper()
     normalized = []
     for item in items:
-        if hasattr(item, 'to_dict') or hasattr(item, '__dict__'):
-            # AldiItem dataclass — identity is SKU
-            name = item.name
-            sku = getattr(item, 'sku', None)
-            item_key = str(sku) if sku else name.strip().lower()
-            normalized.append({
-                'item_key': item_key,
-                'name': name,
-                'sku': sku,
-                'qty': item.qty,
-                'unit_price': item.unit_price,
-                'line_total': item.line_total,
-                'tax_code': getattr(item, 'tax_code', None),
-                'is_food': item.is_food,
-            })
-        else:
-            # Kroger dict — identity is normalized name
-            d = dict(item)
-            name = d.get('name', '')
-            d['item_key'] = name.strip().lower()
-            normalized.append(d)
+        n = aggregate.normalize_item(item, store_upper)
+        normalized.append({
+            'item_key': n['item_key'],
+            'name': n['display_name'],
+            'sku': n.get('sku'),
+            'qty': n['qty'],
+            'unit_price': n.get('unit_price'),
+            'line_total': n['line_total'],
+            'tax_code': n.get('tax_code'),
+            'is_food': n['is_food'],
+        })
 
     # trip_id distinguishes same-day trips (e.g. kroger-8.26-am vs kroger-8.26-pm)
     return {
