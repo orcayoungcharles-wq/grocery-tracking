@@ -113,6 +113,35 @@ def current_user() -> str:
     return _current_user
 
 
+def delete_user(name: str) -> bool:
+    """
+    Remove a user namespace and its data folder.
+    Cannot delete the last remaining user. Returns True if deleted.
+    """
+    import shutil
+
+    slug = _slugify_user(name)
+    users = list_users()
+    if slug not in users:
+        return False
+    if len(users) <= 1:
+        return False
+
+    user_dir = BASE_DATA_DIR / slug
+    if user_dir.exists() and user_dir.is_dir():
+        shutil.rmtree(user_dir)
+
+    remaining = [u for u in users if u != slug]
+    _save_users(remaining)
+
+    global _current_user
+    if _current_user == slug:
+        _current_user = remaining[0]
+        _refresh_paths()
+        _ensure_data_dir()
+    return True
+
+
 def _ensure_data_dir():
     """Create active user's data directory if it doesn't exist."""
     _ensure_base_dir()
@@ -690,13 +719,13 @@ def get_available_weeks():
 
 def get_weekly_item_rankings(week_key: str, top_n: int = 15):
     """
-    Rank items by **spend in that ISO week** (highest $ = #1).
+    Rank items bought in that ISO week by **frequency** (lifetime trips
+    the item appeared on), highest frequency = #1.
 
-    Trend compares each item to the most recent *prior week where that
-    item was purchased* (not an empty gap week), so arrows show up even
-    when you skip a week of shopping.
+    Trend compares each item's frequency-rank to the most recent prior
+    week where that item was purchased.
 
-    Returns rankings rows with week/month spend, trips, qty, unit price, etc.
+    Returns rankings rows with frequency, week/month spend, qty, unit price, etc.
     """
     from collections import defaultdict
     from datetime import datetime as dt
@@ -776,19 +805,27 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
             week_data[key]["name"] = name
             week_data[key]["unit_prices"].append(unit)
 
-    def ranked_keys(data_map):
-        return sorted(data_map.keys(), key=lambda k: -data_map[k]["spend"])
+    # Total trips overall (for frequency %)
+    all_trip_ids = set()
+    for ld in life.values():
+        all_trip_ids |= ld["trips"]
+    total_trips_all = len(all_trip_ids) or 1
 
-    cur_order = ranked_keys(week_data)
+    # Rank by lifetime frequency (trip count), then week spend as tiebreaker
+    def freq_rank_key(k):
+        return (-len(life[k]["trips"]), -week_data[k]["spend"])
+
+    cur_order = sorted(week_data.keys(), key=freq_rank_key)
     cur_rank = {k: i + 1 for i, k in enumerate(cur_order)}
 
-    # For each prior active week, build full rank tables so we can look up
-    # an item's rank the last time it appeared
+    # Prior-week rank tables also by frequency among items bought that week
     week_rank_tables = {}
     for wk in active_weeks:
-        spends = {k: item_week_spend[k].get(wk, 0.0) for k in item_week_spend}
-        spends = {k: v for k, v in spends.items() if v > 0}
-        order = sorted(spends.keys(), key=lambda k: -spends[k])
+        bought = [k for k in item_week_spend if item_week_spend[k].get(wk, 0) > 0]
+        order = sorted(
+            bought,
+            key=lambda k: (-len(life[k]["trips"]), -item_week_spend[k].get(wk, 0)),
+        )
         week_rank_tables[wk] = {k: i + 1 for i, k in enumerate(order)}
 
     month_key = None
@@ -802,6 +839,7 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
         ld = life[key]
         trips_life = len(ld["trips"])
         trips_week = len(wd["trips"])
+        freq_pct = round((trips_life / total_trips_all) * 100, 1)
         avg_qty = round(ld["qty"] / trips_life, 2) if trips_life else 0.0
         avg_unit = (
             round(sum(wd["unit_prices"]) / len(wd["unit_prices"]), 2)
@@ -816,8 +854,6 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
         month_spend = ld["month_spend"].get(month_key, 0.0) if month_key else 0.0
 
         cr = cur_rank.get(key)
-        # Previous rank = rank in the most recent prior active week where
-        # this item was bought (so trend isn't always NEW after a quiet week)
         pr = None
         if week_key in active_weeks:
             my_idx = active_weeks.index(week_key)
@@ -837,6 +873,7 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
             "month_spend": month_spend,
             "times_bought": trips_life,
             "times_this_week": trips_week,
+            "frequency_pct": freq_pct,
             "avg_qty_per_trip": avg_qty,
             "avg_unit_price": avg_unit,
             "price_delta": price_delta,

@@ -341,9 +341,44 @@ def _prev_month_key(key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — multi-user (lightweight, no password)
+# Sidebar — nav tabs + compact collapsible user panel
 # ---------------------------------------------------------------------------
 st.sidebar.markdown("### 🛒 Grocery Tracker")
+
+# Bigger nav — full-width stacked options (tab-like)
+st.markdown(
+    """
+<style>
+section[data-testid="stSidebar"] div[role="radiogroup"] label {
+  background: #0e1520;
+  border: 1px solid #1a2332;
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem !important;
+  margin-bottom: 0.35rem;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+  border-color: #00a0d0;
+}
+section[data-testid="stSidebar"] div[role="radiogroup"] label[data-checked="true"],
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+  border-color: #00c8ff;
+  background: #0f1a28;
+  box-shadow: inset 3px 0 0 #00c8ff;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+page = st.sidebar.radio(
+    "Navigate",
+    ["Dashboard", "Shopping List", "Receipts", "Upload", "Backup"],
+    label_visibility="collapsed",
+)
+
+st.sidebar.markdown("---")
 
 # Restore / init active user
 if "active_user" not in st.session_state:
@@ -351,37 +386,51 @@ if "active_user" not in st.session_state:
 datastore.set_user(st.session_state["active_user"])
 
 users = datastore.list_users()
-user_col1, user_col2 = st.sidebar.columns([3, 1])
-with user_col1:
+
+with st.sidebar.expander("User", expanded=False):
     selected_user = st.selectbox(
-        "User",
+        "Active user",
         options=users,
         index=users.index(st.session_state["active_user"])
         if st.session_state["active_user"] in users
         else 0,
         key="user_select",
+        label_visibility="collapsed",
     )
-if selected_user != st.session_state["active_user"]:
-    st.session_state["active_user"] = selected_user
-    datastore.set_user(selected_user)
-    st.rerun()
+    if selected_user != st.session_state["active_user"]:
+        st.session_state["active_user"] = selected_user
+        datastore.set_user(selected_user)
+        st.rerun()
 
-with st.sidebar.expander("Add user"):
-    new_name = st.text_input("Name", key="new_user_name", placeholder="e.g. alex")
-    if st.button("Create user", key="create_user_btn") and new_name.strip():
+    st.caption(f"Signed in as **{datastore.current_user()}**")
+
+    new_name = st.text_input("Add user", key="new_user_name", placeholder="name")
+    if st.button("Create", key="create_user_btn") and new_name.strip():
         slug = datastore.add_user(new_name.strip())
         st.session_state["active_user"] = slug
         datastore.set_user(slug)
         st.rerun()
 
-st.sidebar.caption(f"Active: **{datastore.current_user()}**")
-st.sidebar.markdown("---")
-
-page = st.sidebar.radio(
-    "Navigate",
-    ["Dashboard", "Shopping List", "Receipts", "Upload", "Backup"],
-    label_visibility="collapsed",
-)
+    if len(users) > 1:
+        del_target = st.selectbox(
+            "Delete user",
+            options=[u for u in users if u != datastore.current_user()] or users,
+            key="del_user_select",
+        )
+        if st.button("Delete user", key="delete_user_btn", type="secondary"):
+            # Don't delete active without switching
+            if del_target == datastore.current_user():
+                others = [u for u in users if u != del_target]
+                if others:
+                    st.session_state["active_user"] = others[0]
+                    datastore.set_user(others[0])
+            if datastore.delete_user(del_target):
+                st.success(f"Deleted {del_target}")
+                st.rerun()
+            else:
+                st.error("Could not delete (need at least one user).")
+    else:
+        st.caption("Can't delete the only user.")
 
 # ---------------------------------------------------------------------------
 # Dashboard
@@ -433,7 +482,23 @@ if page == "Dashboard":
     st.markdown("---")
     view = st.radio("View", ["Weekly", "Monthly"], horizontal=True, index=0)
 
-    weekly = datastore.get_weekly_spending(max_weeks=8)
+    hide_empty = False
+    if view == "Weekly":
+        hide_empty = st.toggle(
+            "Hide weeks with no trips",
+            value=False,
+            help="When on, drops $0 / 0-trip weeks from the weekly bars, pies, trips, and avg $/trip charts.",
+        )
+
+    weekly_raw = datastore.get_weekly_spending(max_weeks=8)
+    if hide_empty:
+        weekly = {
+            k: v
+            for k, v in weekly_raw.items()
+            if (v.get("trips") or 0) > 0 or (v.get("total") or 0) > 0
+        }
+    else:
+        weekly = weekly_raw
     spending = datastore.get_monthly_spending()
 
     if not spending and not weekly:
@@ -610,6 +675,12 @@ if page == "Dashboard":
 
     if view == "Weekly":
         series = datastore.get_trip_and_basket_series(max_weeks=8)
+        if hide_empty and series:
+            series = {
+                k: v
+                for k, v in series.items()
+                if (v.get("trips") or 0) > 0 or (v.get("total") or 0) > 0
+            }
         if series:
             labels = [v["label"] for v in series.values()]
             trips = [v["trips"] for v in series.values()]
@@ -762,7 +833,8 @@ if page == "Dashboard":
         '<div class="section-label">Top items · weekly spend trend</div>',
         unsafe_allow_html=True,
     )
-    sparks = datastore.get_top_item_sparklines(top_n=6, max_weeks=8)
+    # ~2 months of weekly history
+    sparks = datastore.get_top_item_sparklines(top_n=6, max_weeks=10)
     if sparks:
         spark_cols = st.columns(3)
         for i, item in enumerate(sparks):
@@ -862,7 +934,7 @@ color:#00c8ff;font-weight:600;margin-bottom:0.25rem;">Poll · weekly rankings</d
 <div style="font-size:1.35rem;font-weight:700;color:#f0f4f8;letter-spacing:-0.02em;">
 Top items by week</div>
 <div style="font-size:0.8rem;color:#7a8a9a;margin-top:0.2rem;">
-Ranked by <strong style="color:#c8d0da;">spend that week</strong> (highest $ = #1).
+Ranked by <strong style="color:#c8d0da;">frequency</strong> (how often you buy it · highest = #1).
 Trend vs the last week you bought that item — not empty gap weeks.
 </div>
 </div>
@@ -923,9 +995,10 @@ Trend vs the last week you bought that item — not empty gap weeks.
                     "#": m.get("current_rank"),
                     "Trend": trend,
                     "Item": m.get("name"),
+                    "Freq": f"{m.get('frequency_pct', 0)}%",
+                    "Trips": m.get("times_bought", 0),
                     "Week $": f"${m.get('week_spend', 0):.2f}",
                     "Month $": f"${m.get('month_spend', 0):.2f}",
-                    "Trips": m.get("times_bought", 0),
                     "Avg qty/trip": m.get("avg_qty_per_trip", 0),
                     "Unit $": f"${unit:.2f}" if unit is not None else "—",
                     "Price Δ": price_move,
