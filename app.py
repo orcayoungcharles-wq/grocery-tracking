@@ -405,40 +405,50 @@ if page == "Dashboard":
             )
             week_keys = list(weekly.keys())
             n = len(week_keys)
-            cols = st.columns(min(n, 4) if n else 1)
-            for i, wk in enumerate(week_keys):
-                payload = weekly[wk]
-                by_store = payload.get("by_store") or {}
-                if not by_store:
-                    continue
-                col = cols[i % len(cols)]
-                with col:
-                    names = [datastore.display_store(s) for s in by_store.keys()]
-                    vals = list(by_store.values())
-                    fig_p = go.Figure(
-                        data=[
-                            go.Pie(
-                                labels=names,
-                                values=vals,
-                                hole=0.45,
-                                marker=dict(colors=PIE_COLORS),
-                                textinfo="percent",
-                                textfont_size=10,
-                                hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
-                            )
-                        ]
-                    )
-                    fig_p.update_layout(
-                        **PLOTLY_LAYOUT,
-                        height=180,
-                        margin=dict(t=28, b=8, l=8, r=8),
-                        title=dict(
-                            text=payload.get("label", wk),
-                            font=dict(size=11, color="#8a9aaa"),
-                        ),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_p, use_container_width=True, config=CHART_CONFIG)
+            # Up to 4 pies per row
+            for row_start in range(0, n, 4):
+                row_keys = week_keys[row_start : row_start + 4]
+                cols = st.columns(len(row_keys))
+                for col, wk in zip(cols, row_keys):
+                    payload = weekly[wk]
+                    by_store = payload.get("by_store") or {}
+                    if not by_store:
+                        continue
+                    with col:
+                        names = [datastore.display_store(s) for s in by_store.keys()]
+                        vals = list(by_store.values())
+                        fig_p = go.Figure(
+                            data=[
+                                go.Pie(
+                                    labels=names,
+                                    values=vals,
+                                    hole=0.45,
+                                    marker=dict(colors=PIE_COLORS),
+                                    textinfo="percent",
+                                    textfont_size=10,
+                                    hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
+                                )
+                            ]
+                        )
+                        fig_p.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(
+                                family="IBM Plex Sans, sans-serif",
+                                color="#c8d0da",
+                                size=12,
+                            ),
+                            height=180,
+                            margin=dict(t=28, b=8, l=8, r=8),
+                            title=dict(
+                                text=payload.get("label", wk),
+                                font=dict(size=11, color="#8a9aaa"),
+                            ),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(
+                            fig_p, use_container_width=True, config=CHART_CONFIG
+                        )
 
             with st.expander("Raw weekly data"):
                 st.json(weekly)
@@ -466,22 +476,54 @@ if page == "Dashboard":
         fig.update_yaxes(gridcolor="#1a2332")
         st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
-        # Store split for all shown months
-        store_totals: dict[str, float] = {}
-        for payload in spending.values():
-            for store, amount in payload.get("by_store", {}).items():
-                store_totals[store] = round(store_totals.get(store, 0.0) + amount, 2)
-        if store_totals:
-            fig_pie = px.pie(
-                names=[datastore.display_store(s) for s in store_totals.keys()],
-                values=list(store_totals.values()),
-                title="Spend by store (all months)",
-                hole=0.4,
-                color_discrete_sequence=PIE_COLORS,
-            )
-            fig_pie.update_traces(textposition="inside", textinfo="label+percent+value")
-            fig_pie.update_layout(**PLOTLY_LAYOUT, height=320, title_font_color="#e8edf2")
-            st.plotly_chart(fig_pie, use_container_width=True, config=CHART_CONFIG)
+        # Small pie per calendar month (Aldi vs Kroger)
+        st.markdown(
+            '<div class="section-label">Spend by store · each month</div>',
+            unsafe_allow_html=True,
+        )
+        for row_start in range(0, len(months_list), 4):
+            row_months = months_list[row_start : row_start + 4]
+            cols = st.columns(len(row_months))
+            for col, mk in zip(cols, row_months):
+                payload = spending[mk]
+                by_store = payload.get("by_store") or {}
+                if not by_store:
+                    continue
+                with col:
+                    names = [datastore.display_store(s) for s in by_store.keys()]
+                    vals = list(by_store.values())
+                    fig_p = go.Figure(
+                        data=[
+                            go.Pie(
+                                labels=names,
+                                values=vals,
+                                hole=0.45,
+                                marker=dict(colors=PIE_COLORS),
+                                textinfo="percent",
+                                textfont_size=10,
+                                hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
+                            )
+                        ]
+                    )
+                    fig_p.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(
+                            family="IBM Plex Sans, sans-serif",
+                            color="#c8d0da",
+                            size=12,
+                        ),
+                        height=180,
+                        margin=dict(t=28, b=8, l=8, r=8),
+                        title=dict(
+                            text=_month_label(mk),
+                            font=dict(size=11, color="#8a9aaa"),
+                        ),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(
+                        fig_p, use_container_width=True, config=CHART_CONFIG
+                    )
 
         with st.expander("Raw monthly data"):
             st.json(spending)
