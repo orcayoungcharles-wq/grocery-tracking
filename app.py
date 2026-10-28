@@ -722,7 +722,10 @@ if page == "Dashboard":
                     )
                 )
             fig.update_layout(
-                **PLOTLY_LAYOUT,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="IBM Plex Sans, sans-serif", color="#c8d0da", size=12),
+                dragmode=False,
                 height=240,
                 title=dict(text=title, font=dict(color="#e8edf2", size=13)),
                 yaxis_title="USD",
