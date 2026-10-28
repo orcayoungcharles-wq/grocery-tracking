@@ -1,18 +1,122 @@
 import json
 import os
+import re
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-DATA_DIR = Path(__file__).parent / "data"
+BASE_DATA_DIR = Path(__file__).parent / "data"
+USERS_FILE = BASE_DATA_DIR / "users.json"
+DEFAULT_USER = "default"
+
+# Active user namespace — switched via set_user()
+_current_user = DEFAULT_USER
+DATA_DIR = BASE_DATA_DIR / _current_user
 
 RECEIPTS_FILE = DATA_DIR / "receipts.json"
 SPENDING_FILE = DATA_DIR / "monthly_spending.json"
 ITEM_HISTORY_FILE = DATA_DIR / "item_history.json"
 
 
+def _refresh_paths():
+    """Recompute file paths after a user switch."""
+    global DATA_DIR, RECEIPTS_FILE, SPENDING_FILE, ITEM_HISTORY_FILE
+    DATA_DIR = BASE_DATA_DIR / _current_user
+    RECEIPTS_FILE = DATA_DIR / "receipts.json"
+    SPENDING_FILE = DATA_DIR / "monthly_spending.json"
+    ITEM_HISTORY_FILE = DATA_DIR / "item_history.json"
+
+
+def _slugify_user(name: str) -> str:
+    s = (name or "").strip().lower()
+    s = re.sub(r"[^a-z0-9._-]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s or DEFAULT_USER
+
+
+def _ensure_base_dir():
+    BASE_DATA_DIR.mkdir(exist_ok=True)
+
+
+def _migrate_legacy_flat_data():
+    """
+    One-time: if receipts.json lives directly under data/ (old layout),
+    move it into data/default/ so multi-user folders work.
+    """
+    _ensure_base_dir()
+    legacy_receipts = BASE_DATA_DIR / "receipts.json"
+    default_dir = BASE_DATA_DIR / DEFAULT_USER
+    if legacy_receipts.exists() and not (default_dir / "receipts.json").exists():
+        default_dir.mkdir(exist_ok=True)
+        for name in ("receipts.json", "monthly_spending.json", "item_history.json"):
+            src = BASE_DATA_DIR / name
+            if src.exists():
+                shutil.move(str(src), str(default_dir / name))
+
+
+def list_users() -> list[str]:
+    """Known users, always including default."""
+    _ensure_base_dir()
+    _migrate_legacy_flat_data()
+    users = set()
+    if USERS_FILE.exists():
+        try:
+            data = json.loads(USERS_FILE.read_text())
+            if isinstance(data, list):
+                users.update(str(u) for u in data if u)
+        except Exception:
+            pass
+    # Also discover existing folders
+    if BASE_DATA_DIR.exists():
+        for p in BASE_DATA_DIR.iterdir():
+            if p.is_dir() and not p.name.startswith("."):
+                users.add(p.name)
+    users.add(DEFAULT_USER)
+    return sorted(users)
+
+
+def _save_users(users: list[str]):
+    _ensure_base_dir()
+    payload = sorted(set(users) | {DEFAULT_USER})
+    tmp = USERS_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, USERS_FILE)
+
+
+def add_user(name: str) -> str:
+    """Create a user namespace. Returns the slug used."""
+    slug = _slugify_user(name)
+    users = list_users()
+    if slug not in users:
+        users.append(slug)
+        _save_users(users)
+    (BASE_DATA_DIR / slug).mkdir(exist_ok=True)
+    return slug
+
+
+def set_user(name: str) -> str:
+    """Switch active user namespace. Returns slug."""
+    global _current_user
+    slug = _slugify_user(name)
+    add_user(slug)  # ensure exists
+    _current_user = slug
+    _refresh_paths()
+    _ensure_data_dir()
+    return slug
+
+
+def current_user() -> str:
+    return _current_user
+
+
 def _ensure_data_dir():
-    """Create data directory if it doesn't exist."""
+    """Create active user's data directory if it doesn't exist."""
+    _ensure_base_dir()
+    _migrate_legacy_flat_data()
     DATA_DIR.mkdir(exist_ok=True)
 
 
@@ -536,3 +640,131 @@ def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
         "current_key": current_key,
         "previous_key": previous_key,
     }
+
+
+def get_trip_and_basket_series(max_weeks: int | None = 8):
+    """
+    Weekly series for trip count and average basket size.
+    Returns ordered dict: week_key -> {label, trips, total, avg_basket}
+    """
+    weekly = get_weekly_spending(max_weeks=max_weeks)
+    out = {}
+    for key, payload in weekly.items():
+        trips = int(payload.get("trips") or 0)
+        total = float(payload.get("total") or 0)
+        out[key] = {
+            "label": payload.get("label", key),
+            "trips": trips,
+            "total": total,
+            "avg_basket": round(total / trips, 2) if trips else 0.0,
+        }
+    return out
+
+
+def get_monthly_trip_and_basket():
+    """
+    Calendar-month series for trip count and average basket.
+    Returns ordered dict: YYYY-MM -> {label, trips, total, avg_basket}
+    """
+    from collections import defaultdict
+
+    receipts = load_receipts()
+    months: dict = defaultdict(lambda: {"trips": 0, "total": 0.0})
+    for r in receipts:
+        d = r.get("date") or ""
+        if len(d) < 7:
+            continue
+        mk = d[:7]
+        months[mk]["trips"] += 1
+        months[mk]["total"] = round(months[mk]["total"] + _receipt_spend(r), 2)
+    ordered = dict(sorted(months.items()))
+    for mk, payload in ordered.items():
+        trips = payload["trips"]
+        total = payload["total"]
+        try:
+            dt = datetime.strptime(mk + "-01", "%Y-%m-%d")
+            label = dt.strftime("%b %Y")
+        except ValueError:
+            label = mk
+        payload["label"] = label
+        payload["avg_basket"] = round(total / trips, 2) if trips else 0.0
+    return ordered
+
+
+def get_cumulative_month_spend(month_key: str):
+    """
+    Running total of spend within a calendar month, by receipt date.
+    Returns list of {date, daily, cumulative} sorted by date.
+    Multiple trips same day are summed into daily.
+    """
+    from collections import defaultdict
+
+    by_day: dict = defaultdict(float)
+    for r in get_receipts_in_month(month_key):
+        d = r.get("date") or ""
+        if not d:
+            continue
+        by_day[d] = round(by_day[d] + _receipt_spend(r), 2)
+    running = 0.0
+    out = []
+    for d in sorted(by_day.keys()):
+        running = round(running + by_day[d], 2)
+        out.append({"date": d, "daily": by_day[d], "cumulative": running})
+    return out
+
+
+def get_top_item_sparklines(top_n: int = 6, max_weeks: int = 8):
+    """
+    Top items by recent spend with weekly spend series for sparklines.
+    Returns list of {
+      item_key, name, total_spend,
+      weeks: [week_label, ...],
+      series: [spend_week_0, ...]  # aligned to weeks
+    }
+    """
+    from collections import defaultdict
+    from datetime import datetime as dt, timedelta
+
+    weekly = get_weekly_spending(max_weeks=max_weeks)
+    week_keys = list(weekly.keys())
+    if not week_keys:
+        return []
+
+    # Map each ISO week key to index
+    week_index = {k: i for i, k in enumerate(week_keys)}
+    labels = [weekly[k].get("label", k) for k in week_keys]
+
+    # Aggregate item spend per week
+    # item_key -> list of spends aligned to week_keys
+    series_map: dict = defaultdict(lambda: [0.0] * len(week_keys))
+    names: dict = {}
+    totals: dict = defaultdict(float)
+
+    for entry in load_item_history():
+        d_str = entry.get("date") or ""
+        try:
+            d = dt.strptime(d_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        iso = d.isocalendar()
+        wk = f"{iso.year}-W{iso.week:02d}"
+        if wk not in week_index:
+            continue
+        key = entry.get("item_key") or entry.get("name")
+        amt = float(entry.get("price") or 0)
+        idx = week_index[wk]
+        series_map[key][idx] = round(series_map[key][idx] + amt, 2)
+        totals[key] = round(totals[key] + amt, 2)
+        names[key] = entry.get("name") or key
+
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:top_n]
+    out = []
+    for key, total in ranked:
+        out.append({
+            "item_key": key,
+            "name": names.get(key, key),
+            "total_spend": total,
+            "weeks": labels,
+            "series": series_map[key],
+        })
+    return out

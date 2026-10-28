@@ -341,9 +341,42 @@ def _prev_month_key(key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar
+# Sidebar — multi-user (lightweight, no password)
 # ---------------------------------------------------------------------------
 st.sidebar.markdown("### 🛒 Grocery Tracker")
+
+# Restore / init active user
+if "active_user" not in st.session_state:
+    st.session_state["active_user"] = datastore.DEFAULT_USER
+datastore.set_user(st.session_state["active_user"])
+
+users = datastore.list_users()
+user_col1, user_col2 = st.sidebar.columns([3, 1])
+with user_col1:
+    selected_user = st.selectbox(
+        "User",
+        options=users,
+        index=users.index(st.session_state["active_user"])
+        if st.session_state["active_user"] in users
+        else 0,
+        key="user_select",
+    )
+if selected_user != st.session_state["active_user"]:
+    st.session_state["active_user"] = selected_user
+    datastore.set_user(selected_user)
+    st.rerun()
+
+with st.sidebar.expander("Add user"):
+    new_name = st.text_input("Name", key="new_user_name", placeholder="e.g. alex")
+    if st.button("Create user", key="create_user_btn") and new_name.strip():
+        slug = datastore.add_user(new_name.strip())
+        st.session_state["active_user"] = slug
+        datastore.set_user(slug)
+        st.rerun()
+
+st.sidebar.caption(f"Active: **{datastore.current_user()}**")
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio(
     "Navigate",
     ["Dashboard", "Shopping List", "Receipts", "Upload", "Backup"],
@@ -563,6 +596,181 @@ if page == "Dashboard":
 
         with st.expander("Raw monthly data"):
             st.json(spending)
+
+    # ---- Extra series: trips, basket, cumulative, sparklines ----
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-label">Trips · basket size · cumulative</div>',
+        unsafe_allow_html=True,
+    )
+
+    if view == "Weekly":
+        series = datastore.get_trip_and_basket_series(max_weeks=8)
+        if series:
+            labels = [v["label"] for v in series.values()]
+            trips = [v["trips"] for v in series.values()]
+            baskets = [v["avg_basket"] for v in series.values()]
+
+            c_left, c_right = st.columns(2)
+            with c_left:
+                fig_t = px.bar(
+                    x=labels,
+                    y=trips,
+                    title="Trips per week",
+                    text=trips,
+                    labels={"x": "", "y": "Trips"},
+                )
+                fig_t.update_traces(
+                    textposition="outside", marker_color="#5b8def", texttemplate="%{y}"
+                )
+                fig_t.update_layout(
+                    **PLOTLY_LAYOUT, height=260, title_font_color="#e8edf2",
+                    yaxis_title="Trips", xaxis_title="",
+                )
+                fig_t.update_xaxes(gridcolor="#1a2332")
+                fig_t.update_yaxes(gridcolor="#1a2332", dtick=1)
+                st.plotly_chart(fig_t, use_container_width=True, config=CHART_CONFIG)
+            with c_right:
+                fig_b = px.bar(
+                    x=labels,
+                    y=baskets,
+                    title="Avg basket size ($)",
+                    text=[f"${v:.0f}" for v in baskets],
+                    labels={"x": "", "y": "USD"},
+                )
+                fig_b.update_traces(
+                    textposition="outside", marker_color="#3dd68c"
+                )
+                fig_b.update_layout(
+                    **PLOTLY_LAYOUT, height=260, title_font_color="#e8edf2",
+                    yaxis_title="USD", xaxis_title="",
+                )
+                fig_b.update_xaxes(gridcolor="#1a2332")
+                fig_b.update_yaxes(gridcolor="#1a2332")
+                st.plotly_chart(fig_b, use_container_width=True, config=CHART_CONFIG)
+    else:
+        series = datastore.get_monthly_trip_and_basket()
+        if series:
+            labels = [v["label"] for v in series.values()]
+            trips = [v["trips"] for v in series.values()]
+            baskets = [v["avg_basket"] for v in series.values()]
+
+            c_left, c_right = st.columns(2)
+            with c_left:
+                fig_t = px.bar(
+                    x=labels,
+                    y=trips,
+                    title="Trips per month",
+                    text=trips,
+                    labels={"x": "", "y": "Trips"},
+                )
+                fig_t.update_traces(
+                    textposition="outside", marker_color="#5b8def", texttemplate="%{y}"
+                )
+                fig_t.update_layout(
+                    **PLOTLY_LAYOUT, height=260, title_font_color="#e8edf2",
+                    yaxis_title="Trips", xaxis_title="",
+                )
+                fig_t.update_xaxes(gridcolor="#1a2332")
+                fig_t.update_yaxes(gridcolor="#1a2332", dtick=1)
+                st.plotly_chart(fig_t, use_container_width=True, config=CHART_CONFIG)
+            with c_right:
+                fig_b = px.bar(
+                    x=labels,
+                    y=baskets,
+                    title="Avg basket size ($)",
+                    text=[f"${v:.0f}" for v in baskets],
+                    labels={"x": "", "y": "USD"},
+                )
+                fig_b.update_traces(
+                    textposition="outside", marker_color="#3dd68c"
+                )
+                fig_b.update_layout(
+                    **PLOTLY_LAYOUT, height=260, title_font_color="#e8edf2",
+                    yaxis_title="USD", xaxis_title="",
+                )
+                fig_b.update_xaxes(gridcolor="#1a2332")
+                fig_b.update_yaxes(gridcolor="#1a2332")
+                st.plotly_chart(fig_b, use_container_width=True, config=CHART_CONFIG)
+
+    # Cumulative spend within selected month
+    cum = datastore.get_cumulative_month_spend(selected)
+    if cum:
+        fig_c = go.Figure()
+        fig_c.add_trace(
+            go.Scatter(
+                x=[r["date"] for r in cum],
+                y=[r["cumulative"] for r in cum],
+                mode="lines+markers",
+                line=dict(color="#00c8ff", width=2),
+                marker=dict(size=6, color="#00c8ff"),
+                fill="tozeroy",
+                fillcolor="rgba(0,200,255,0.08)",
+                hovertemplate="%{x}<br>Cumulative: $%{y:.2f}<extra></extra>",
+            )
+        )
+        fig_c.update_layout(
+            **PLOTLY_LAYOUT,
+            height=280,
+            title=dict(
+                text=f"Cumulative spend · {_month_label(selected)}",
+                font=dict(color="#e8edf2"),
+            ),
+            yaxis_title="USD",
+            xaxis_title="",
+        )
+        fig_c.update_xaxes(gridcolor="#1a2332")
+        fig_c.update_yaxes(gridcolor="#1a2332")
+        st.plotly_chart(fig_c, use_container_width=True, config=CHART_CONFIG)
+
+    # Top-N item sparklines (last 8 weeks)
+    st.markdown(
+        '<div class="section-label">Top items · weekly spend trend</div>',
+        unsafe_allow_html=True,
+    )
+    sparks = datastore.get_top_item_sparklines(top_n=6, max_weeks=8)
+    if sparks:
+        spark_cols = st.columns(3)
+        for i, item in enumerate(sparks):
+            with spark_cols[i % 3]:
+                fig_s = go.Figure()
+                fig_s.add_trace(
+                    go.Scatter(
+                        x=item["weeks"],
+                        y=item["series"],
+                        mode="lines+markers",
+                        line=dict(color="#00c8ff", width=1.5),
+                        marker=dict(size=4),
+                        fill="tozeroy",
+                        fillcolor="rgba(0,200,255,0.1)",
+                        hovertemplate="%{x}: $%{y:.2f}<extra></extra>",
+                    )
+                )
+                fig_s.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(
+                        family="IBM Plex Sans, sans-serif", color="#c8d0da", size=10
+                    ),
+                    height=130,
+                    margin=dict(t=28, b=24, l=28, r=8),
+                    title=dict(
+                        text=f"{item['name']}  ·  ${item['total_spend']:.2f}",
+                        font=dict(size=11, color="#a8b8c8"),
+                    ),
+                    showlegend=False,
+                    xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                    yaxis=dict(
+                        showgrid=True,
+                        gridcolor="#1a2332",
+                        zeroline=False,
+                        tickprefix="$",
+                        tickfont=dict(size=9),
+                    ),
+                )
+                st.plotly_chart(fig_s, use_container_width=True, config=CHART_CONFIG)
+    else:
+        st.caption("Not enough item history for sparklines yet.")
 
     # ---- Item rankings (AP Top-25 style) ----
     st.markdown("---")
