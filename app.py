@@ -199,10 +199,46 @@ PLOTLY_LAYOUT = dict(
 )
 CHART_CONFIG = {"staticPlot": True, "displayModeBar": False}
 
-# Bar colors (cool cyan/blue) vs pie colors (warmer amber/teal contrast)
+# Bar colors (cool cyan/blue) vs pie colors (fixed per store)
 BAR_COLOR = "#00a8e8"
 BAR_COLOR_ALT = "#0077aa"
-PIE_COLORS = ["#f0a030", "#e07040", "#c05060", "#8060a0", "#4080b0", "#30a090"]
+STORE_PIE_COLORS = {
+    "aldi": "#f0a030",    # amber
+    "kroger": "#3d8fd1",  # steel blue
+}
+PIE_FALLBACK = ["#e07040", "#c05060", "#8060a0", "#30a090"]
+
+
+def _store_color(store: str) -> str:
+    return STORE_PIE_COLORS.get((store or "").lower(), "#888888")
+
+
+def _pie_colors_for(by_store: dict) -> list[str]:
+    colors = []
+    fallback_i = 0
+    for s in by_store.keys():
+        key = (s or "").lower()
+        if key in STORE_PIE_COLORS:
+            colors.append(STORE_PIE_COLORS[key])
+        else:
+            colors.append(PIE_FALLBACK[fallback_i % len(PIE_FALLBACK)])
+            fallback_i += 1
+    return colors
+
+
+def _store_legend_html() -> str:
+    """Single small Aldi / Kroger color key for pie sections."""
+    return (
+        '<div style="display:flex;gap:1.25rem;align-items:center;'
+        'font-size:0.78rem;color:#8a9aaa;margin:0.15rem 0 0.5rem 0;">'
+        '<span style="display:flex;align-items:center;gap:0.35rem;">'
+        '<span style="width:10px;height:10px;border-radius:50%;'
+        'background:#f0a030;display:inline-block;"></span>Aldi</span>'
+        '<span style="display:flex;align-items:center;gap:0.35rem;">'
+        '<span style="width:10px;height:10px;border-radius:50%;'
+        'background:#3d8fd1;display:inline-block;"></span>Kroger</span>'
+        "</div>"
+    )
 
 
 def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
@@ -403,11 +439,12 @@ if page == "Dashboard":
                 '<div class="section-label">Spend by store · each week</div>',
                 unsafe_allow_html=True,
             )
+            st.markdown(_store_legend_html(), unsafe_allow_html=True)
             week_keys = list(weekly.keys())
             n = len(week_keys)
-            # Up to 4 pies per row
-            for row_start in range(0, n, 4):
-                row_keys = week_keys[row_start : row_start + 4]
+            # Up to 8 compact pies per row
+            for row_start in range(0, n, 8):
+                row_keys = week_keys[row_start : row_start + 8]
                 cols = st.columns(len(row_keys))
                 for col, wk in zip(cols, row_keys):
                     payload = weekly[wk]
@@ -422,10 +459,9 @@ if page == "Dashboard":
                                 go.Pie(
                                     labels=names,
                                     values=vals,
-                                    hole=0.45,
-                                    marker=dict(colors=PIE_COLORS),
-                                    textinfo="percent",
-                                    textfont_size=10,
+                                    hole=0.5,
+                                    marker=dict(colors=_pie_colors_for(by_store)),
+                                    textinfo="none",
                                     hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
                                 )
                             ]
@@ -436,13 +472,13 @@ if page == "Dashboard":
                             font=dict(
                                 family="IBM Plex Sans, sans-serif",
                                 color="#c8d0da",
-                                size=12,
+                                size=10,
                             ),
-                            height=180,
-                            margin=dict(t=28, b=8, l=8, r=8),
+                            height=110,
+                            margin=dict(t=22, b=4, l=4, r=4),
                             title=dict(
                                 text=payload.get("label", wk),
-                                font=dict(size=11, color="#8a9aaa"),
+                                font=dict(size=10, color="#8a9aaa"),
                             ),
                             showlegend=False,
                         )
@@ -481,8 +517,9 @@ if page == "Dashboard":
             '<div class="section-label">Spend by store · each month</div>',
             unsafe_allow_html=True,
         )
-        for row_start in range(0, len(months_list), 4):
-            row_months = months_list[row_start : row_start + 4]
+        st.markdown(_store_legend_html(), unsafe_allow_html=True)
+        for row_start in range(0, len(months_list), 6):
+            row_months = months_list[row_start : row_start + 6]
             cols = st.columns(len(row_months))
             for col, mk in zip(cols, row_months):
                 payload = spending[mk]
@@ -497,10 +534,9 @@ if page == "Dashboard":
                             go.Pie(
                                 labels=names,
                                 values=vals,
-                                hole=0.45,
-                                marker=dict(colors=PIE_COLORS),
-                                textinfo="percent",
-                                textfont_size=10,
+                                hole=0.5,
+                                marker=dict(colors=_pie_colors_for(by_store)),
+                                textinfo="none",
                                 hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
                             )
                         ]
@@ -511,13 +547,13 @@ if page == "Dashboard":
                         font=dict(
                             family="IBM Plex Sans, sans-serif",
                             color="#c8d0da",
-                            size=12,
+                            size=10,
                         ),
-                        height=180,
-                        margin=dict(t=28, b=8, l=8, r=8),
+                        height=110,
+                        margin=dict(t=22, b=4, l=4, r=4),
                         title=dict(
                             text=_month_label(mk),
-                            font=dict(size=11, color="#8a9aaa"),
+                            font=dict(size=10, color="#8a9aaa"),
                         ),
                         showlegend=False,
                     )
@@ -528,51 +564,53 @@ if page == "Dashboard":
         with st.expander("Raw monthly data"):
             st.json(spending)
 
-    # ---- Item rankings / movers ----
+    # ---- Item rankings (AP Top-25 style) ----
     st.markdown("---")
     st.markdown(
         '<div class="section-label">Item rankings · selected month vs prior</div>',
         unsafe_allow_html=True,
     )
-    st.subheader("Movers")
-    movers = datastore.get_item_movers(selected, prev_key, top_n=8)
+    st.subheader(f"Top items · {_month_label(selected)}")
+    movers = datastore.get_item_movers(selected, prev_key, top_n=15)
+    top_items = movers["current_top"]
 
-    col_top, col_up, col_down = st.columns(3)
-
-    def _rank_block(title: str, items: list, mode: str):
-        st.markdown(f"**{title}**")
-        if not items:
-            st.caption("No data yet.")
-            return
-        for i, m in enumerate(items, 1):
-            if mode == "top":
-                badge = f"#{m['current_rank']}"
-                badge_cls = "rank-num"
-            elif mode == "up":
-                if m["previous_rank"] is None:
-                    badge = "NEW"
-                    badge_cls = "rank-new"
-                else:
-                    badge = f"↑{m['rank_delta']}"
-                    badge_cls = "rank-up"
+    if not top_items:
+        st.caption("No item data for this month yet.")
+    else:
+        # Header row
+        st.markdown(
+            '<div class="rank-row" style="color:#6a7a8a;font-size:0.72rem;'
+            'text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #2a3545;">'
+            '<span class="rank-num">#</span>'
+            '<span style="flex:1">Item</span>'
+            '<span style="min-width:4.5rem;text-align:right;margin-right:1rem;">Spend</span>'
+            '<span style="min-width:3.2rem;text-align:right;">Trend</span>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        for m in top_items:
+            rank = m.get("current_rank") or "—"
+            rd = m.get("rank_delta")
+            prev_r = m.get("previous_rank")
+            if prev_r is None:
+                trend_html = '<span class="rank-new">NEW</span>'
+            elif rd is None or rd == 0:
+                trend_html = '<span style="color:#6a7a8a;">—</span>'
+            elif rd > 0:
+                trend_html = f'<span class="rank-up">↑{rd}</span>'
             else:
-                badge = f"↓{abs(m['rank_delta'] or 0)}"
-                badge_cls = "rank-down"
+                trend_html = f'<span class="rank-down">↓{abs(rd)}</span>'
             st.markdown(
                 f'<div class="rank-row">'
-                f'<span class="{badge_cls}">{badge}</span>'
+                f'<span class="rank-num">{rank}</span>'
                 f'<span style="flex:1">{m["name"]}</span>'
-                f'<span style="font-family:IBM Plex Mono,monospace;color:#8ab">${m["current_spend"]:.2f}</span>'
+                f'<span style="min-width:4.5rem;text-align:right;margin-right:1rem;'
+                f'font-family:IBM Plex Mono,monospace;color:#a8b8c8;">'
+                f'${m["current_spend"]:.2f}</span>'
+                f'<span style="min-width:3.2rem;text-align:right;">{trend_html}</span>'
                 f"</div>",
                 unsafe_allow_html=True,
             )
-
-    with col_top:
-        _rank_block(f"Top spend · {_month_label(selected)}", movers["current_top"], "top")
-    with col_up:
-        _rank_block("Rising", movers["rising"], "up")
-    with col_down:
-        _rank_block("Falling", movers["falling"], "down")
 
 # ---------------------------------------------------------------------------
 # Shopping List
