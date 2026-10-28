@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import tempfile
 from pathlib import Path
+from datetime import datetime
 
 import streamlit as st
 import plotly.express as px
@@ -21,18 +22,191 @@ st.set_page_config(
     page_title="Grocery Tracker",
     page_icon="🛒",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+# ---------------------------------------------------------------------------
+# Theme — dark tactical / ops-dashboard aesthetic
+# ---------------------------------------------------------------------------
+THEME_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] {
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.stApp {
+  background: linear-gradient(160deg, #0a0e14 0%, #0d1219 40%, #0a1018 100%);
+  color: #e8edf2;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+  background: #080c12 !important;
+  border-right: 1px solid #1a2332;
+}
+section[data-testid="stSidebar"] * {
+  color: #c8d0da !important;
+}
+section[data-testid="stSidebar"] .stRadio label {
+  color: #c8d0da !important;
+}
+
+/* Headings */
+h1, h2, h3 {
+  font-family: 'IBM Plex Sans', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: #f0f4f8 !important;
+}
+h1 {
+  font-size: 1.85rem !important;
+  border-bottom: 1px solid #1e2a3a;
+  padding-bottom: 0.4rem;
+}
+
+/* Metric cards */
+div[data-testid="stMetric"] {
+  background: linear-gradient(145deg, #111820 0%, #0e141c 100%);
+  border: 1px solid #1e2a3a;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  box-shadow: 0 0 0 1px rgba(0, 180, 255, 0.04);
+}
+div[data-testid="stMetric"] label {
+  color: #7a8a9a !important;
+  font-size: 0.75rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500 !important;
+}
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+  color: #00c8ff !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-weight: 500 !important;
+  font-size: 1.45rem !important;
+}
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+  font-size: 0.8rem !important;
+}
+
+/* Big month banner */
+.month-banner {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 2.4rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #f0f4f8;
+  margin: 0.2rem 0 0.6rem 0;
+  line-height: 1.1;
+}
+.month-banner span {
+  color: #00c8ff;
+  font-weight: 600;
+}
+
+/* Section labels */
+.section-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #5a6a7a;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+/* Rank rows */
+.rank-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #1a2332;
+  font-size: 0.9rem;
+}
+.rank-num {
+  font-family: 'IBM Plex Mono', monospace;
+  color: #00c8ff;
+  font-weight: 600;
+  min-width: 1.6rem;
+}
+.rank-up { color: #3dd68c; font-weight: 600; }
+.rank-down { color: #ff6b6b; font-weight: 600; }
+.rank-new { color: #f0c040; font-weight: 600; }
+
+/* Buttons */
+.stButton > button {
+  border-radius: 4px !important;
+  border: 1px solid #1e3a5f !important;
+  background: #0f1a28 !important;
+  color: #c8d8e8 !important;
+}
+.stButton > button:hover {
+  border-color: #00c8ff !important;
+  color: #00c8ff !important;
+}
+.stButton > button[kind="primary"] {
+  background: linear-gradient(135deg, #0a3a55 0%, #0d4a6a 100%) !important;
+  border-color: #00a0d0 !important;
+  color: #e8f4ff !important;
+}
+
+/* Radio / select */
+div[role="radiogroup"] label {
+  color: #c8d0da !important;
+}
+
+/* Expander */
+.streamlit-expanderHeader {
+  background: #0e141c !important;
+  border: 1px solid #1a2332 !important;
+  border-radius: 4px !important;
+  color: #c8d0da !important;
+}
+
+/* Dataframes */
+div[data-testid="stDataFrame"] {
+  border: 1px solid #1a2332;
+  border-radius: 4px;
+}
+
+/* Divider */
+hr {
+  border-color: #1a2332 !important;
+}
+
+/* Caption */
+.stCaption, small {
+  color: #6a7a8a !important;
+}
+
+/* Hide Streamlit chrome clutter a bit */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+</style>
+"""
+
+st.markdown(THEME_CSS, unsafe_allow_html=True)
+
+# Plotly shared dark layout
+PLOTLY_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="IBM Plex Sans, sans-serif", color="#c8d0da", size=12),
+    margin=dict(t=48, b=40, l=48, r=24),
+    dragmode=False,
+)
+CHART_CONFIG = {"staticPlot": True, "displayModeBar": False}
+
+# Bar colors (cool cyan/blue) vs pie colors (warmer amber/teal contrast)
+BAR_COLOR = "#00a8e8"
+BAR_COLOR_ALT = "#0077aa"
+PIE_COLORS = ["#f0a030", "#e07040", "#c05060", "#8060a0", "#4080b0", "#30a090"]
 
 
 def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
-    """Parse receipt text and return a dict for datastore.add_receipt.
-
-    Item identity uses aggregate.normalize_item:
-      - Aldi  → 6-digit SKU
-      - Kroger → alias-expanded uppercase name
-    is_food is re-checked against NON_FOOD_KEYWORDS so shampoo etc. stay out
-    of food spend even if the parser misses a tax flag.
-    """
+    """Parse receipt text and return a dict for datastore.add_receipt."""
     import re
     store_upper = store.upper()
     if store == "aldi":
@@ -40,7 +214,6 @@ def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
         items_raw = result.items
         subtotal = result.subtotal
         reconciles = result.reconciles
-        # Prefer printed B-Taxable / AMOUNT DUE when present
         tax = 0.0
         m_tax = re.search(r"B-Taxable\s*@[\d.]+%\s+([\d.]+)", text, re.I)
         if m_tax:
@@ -73,8 +246,6 @@ def parse_uploaded_text(text: str, store: str, filename: str) -> dict:
             "is_food": n["is_food"],
         })
 
-    # Prefer printed date on the receipt body (MM/DD/YY), else filename MM.DD / MM-DD
-    import re
     from datetime import date
     m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2})", text)
     if m:
@@ -110,58 +281,91 @@ def detect_store_from_name(name: str) -> str | None:
     return None
 
 
+def _amt(d) -> float:
+    return float(d.get("total", d.get("food", 0)) or 0)
+
+
+def _month_label(key: str) -> str:
+    """'2026-10' → 'October 2026'."""
+    try:
+        dt = datetime.strptime(key + "-01", "%Y-%m-%d")
+        return dt.strftime("%B %Y")
+    except ValueError:
+        return key
+
+
+def _prev_month_key(key: str) -> str:
+    try:
+        dt = datetime.strptime(key + "-01", "%Y-%m-%d")
+        if dt.month == 1:
+            return f"{dt.year - 1}-12"
+        return f"{dt.year}-{dt.month - 1:02d}"
+    except ValueError:
+        return key
+
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
-st.sidebar.title("🛒 Grocery Tracker")
+st.sidebar.markdown("### 🛒 Grocery Tracker")
 page = st.sidebar.radio(
     "Navigate",
     ["Dashboard", "Shopping List", "Receipts", "Upload", "Backup"],
     label_visibility="collapsed",
 )
 
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Data is stored in JSON under `data/`. "
-    "On Streamlit Cloud the filesystem resets on redeploy — use **Backup** to export/import."
-)
-if st.sidebar.button("Reset all data", type="secondary"):
-    datastore.reset_data()
-    st.sidebar.success("Data cleared.")
-    st.rerun()
-
 # ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 if page == "Dashboard":
-    st.title("Spending Dashboard")
+    months = datastore.get_available_months()
+    now = datetime.utcnow()
+    default_key = f"{now.year}-{now.month:02d}"
+    if default_key not in months and months:
+        default_key = months[-1]
 
-    data = datastore.get_all_data()
-    spending = data["spending"]
-    current = data["current_month"]
-    previous = data["previous_month"]
-    receipt_count = data["receipt_count"]
-    weekly = datastore.get_weekly_spending(max_weeks=8)
+    # Month selector
+    col_sel, col_spacer = st.columns([2, 3])
+    with col_sel:
+        if months:
+            selected = st.selectbox(
+                "View month",
+                options=months,
+                index=months.index(default_key) if default_key in months else len(months) - 1,
+                format_func=_month_label,
+                label_visibility="collapsed",
+            )
+        else:
+            selected = default_key
+            st.info("No spending data yet.")
 
-    def _amt(d):
-        return float(d.get("total", d.get("food", 0)) or 0)
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Receipts stored", receipt_count)
-    col2.metric(
-        "This month",
-        f"${_amt(current):.2f}",
-        delta=f"${_amt(current) - _amt(previous):.2f} vs prior",
+    # Big month banner
+    st.markdown(
+        f'<div class="month-banner"><span>{_month_label(selected)}</span></div>',
+        unsafe_allow_html=True,
     )
-    col3.metric("Prior month", f"${_amt(previous):.2f}")
-    stores = current.get("by_store", {})
-    col4.metric("Stores this month", ", ".join(f"{k}: ${v:.2f}" for k, v in stores.items()) or "—")
+
+    selected_data = datastore.get_month_data(selected)
+    prev_key = _prev_month_key(selected)
+    prev_data = datastore.get_month_data(prev_key)
+    receipts_in_month = datastore.get_receipts_in_month(selected)
+    n_trips = len(receipts_in_month)
+    avg_trip = (_amt(selected_data) / n_trips) if n_trips else 0.0
+    all_receipts = datastore.load_receipts()
+
+    # KPI row
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Month spend", f"${_amt(selected_data):.2f}",
+              delta=f"${_amt(selected_data) - _amt(prev_data):.2f} vs prior")
+    c2.metric("Trips this month", str(n_trips))
+    c3.metric("Avg per trip", f"${avg_trip:.2f}")
+    c4.metric("All-time receipts", str(len(all_receipts)))
 
     st.markdown("---")
     view = st.radio("View", ["Weekly", "Monthly"], horizontal=True, index=0)
 
-    # Static charts: no zoom/pan/mode bar
-    chart_config = {"staticPlot": True, "displayModeBar": False}
+    weekly = datastore.get_weekly_spending(max_weeks=8)
+    spending = datastore.get_monthly_spending()
 
     if not spending and not weekly:
         st.info("No spending data yet. Upload receipts on the Upload page.")
@@ -170,7 +374,7 @@ if page == "Dashboard":
             st.info("No weekly data yet.")
         else:
             labels = [weekly[w].get("label", w) for w in weekly]
-            totals = [weekly[w].get("total", weekly[w].get("food", 0)) for w in weekly]
+            totals = [weekly[w].get("total", 0) for w in weekly]
             fig = px.bar(
                 x=labels,
                 y=totals,
@@ -178,71 +382,155 @@ if page == "Dashboard":
                 title="Weekly spend (last 8 weeks)",
                 text=[f"${v:.2f}" for v in totals],
             )
-            fig.update_traces(textposition="outside")
+            fig.update_traces(
+                textposition="outside",
+                marker_color=BAR_COLOR,
+                marker_line_width=0,
+            )
             fig.update_layout(
+                **PLOTLY_LAYOUT,
                 yaxis_title="USD",
                 xaxis_title="",
-                height=320,
-                margin=dict(t=40, b=40, l=40, r=20),
-                dragmode=False,
+                height=340,
+                title_font_color="#e8edf2",
             )
-            st.plotly_chart(fig, use_container_width=True, config=chart_config)
+            fig.update_xaxes(gridcolor="#1a2332", zeroline=False)
+            fig.update_yaxes(gridcolor="#1a2332", zeroline=False)
+            st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
-            # Pie: same window as the bar (sum by store across shown weeks)
-            store_totals: dict[str, float] = {}
-            for payload in weekly.values():
-                for store, amount in payload.get("by_store", {}).items():
-                    store_totals[store] = round(store_totals.get(store, 0.0) + amount, 2)
-            if store_totals:
-                fig_pie = px.pie(
-                    names=[s.title() for s in store_totals.keys()],
-                    values=list(store_totals.values()),
-                    title="Spend by store (same weeks)",
-                    hole=0.35,
-                )
-                fig_pie.update_traces(textposition="inside", textinfo="label+percent+value")
-                fig_pie.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20))
-                st.plotly_chart(fig_pie, use_container_width=True, config=chart_config)
+            # Small pie per week
+            st.markdown(
+                '<div class="section-label">Spend by store · each week</div>',
+                unsafe_allow_html=True,
+            )
+            week_keys = list(weekly.keys())
+            n = len(week_keys)
+            cols = st.columns(min(n, 4) if n else 1)
+            for i, wk in enumerate(week_keys):
+                payload = weekly[wk]
+                by_store = payload.get("by_store") or {}
+                if not by_store:
+                    continue
+                col = cols[i % len(cols)]
+                with col:
+                    names = [datastore.display_store(s) for s in by_store.keys()]
+                    vals = list(by_store.values())
+                    fig_p = go.Figure(
+                        data=[
+                            go.Pie(
+                                labels=names,
+                                values=vals,
+                                hole=0.45,
+                                marker=dict(colors=PIE_COLORS),
+                                textinfo="percent",
+                                textfont_size=10,
+                                hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
+                            )
+                        ]
+                    )
+                    fig_p.update_layout(
+                        **PLOTLY_LAYOUT,
+                        height=180,
+                        margin=dict(t=28, b=8, l=8, r=8),
+                        title=dict(
+                            text=payload.get("label", wk),
+                            font=dict(size=11, color="#8a9aaa"),
+                        ),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_p, use_container_width=True, config=CHART_CONFIG)
 
             with st.expander("Raw weekly data"):
                 st.json(weekly)
     else:
-        months = list(spending.keys())
-        totals = [_amt(spending[m]) for m in months]
+        # Calendar-month bars
+        months_list = list(spending.keys())
+        totals = [_amt(spending[m]) for m in months_list]
+        display_months = [_month_label(m) for m in months_list]
         fig = px.bar(
-            x=months,
+            x=display_months,
             y=totals,
             labels={"x": "Month", "y": "Spend ($)"},
-            title="Monthly spend",
+            title="Monthly spend (calendar months)",
             text=[f"${v:.2f}" for v in totals],
         )
-        fig.update_traces(textposition="outside")
+        fig.update_traces(textposition="outside", marker_color=BAR_COLOR)
         fig.update_layout(
+            **PLOTLY_LAYOUT,
             yaxis_title="USD",
             xaxis_title="",
-            height=320,
-            margin=dict(t=40, b=40, l=40, r=20),
-            dragmode=False,
+            height=340,
+            title_font_color="#e8edf2",
         )
-        st.plotly_chart(fig, use_container_width=True, config=chart_config)
+        fig.update_xaxes(gridcolor="#1a2332")
+        fig.update_yaxes(gridcolor="#1a2332")
+        st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
-        store_totals = {}
+        # Store split for all shown months
+        store_totals: dict[str, float] = {}
         for payload in spending.values():
             for store, amount in payload.get("by_store", {}).items():
                 store_totals[store] = round(store_totals.get(store, 0.0) + amount, 2)
         if store_totals:
             fig_pie = px.pie(
-                names=[s.title() for s in store_totals.keys()],
+                names=[datastore.display_store(s) for s in store_totals.keys()],
                 values=list(store_totals.values()),
-                title="Spend by store (all months shown)",
-                hole=0.35,
+                title="Spend by store (all months)",
+                hole=0.4,
+                color_discrete_sequence=PIE_COLORS,
             )
             fig_pie.update_traces(textposition="inside", textinfo="label+percent+value")
-            fig_pie.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20))
-            st.plotly_chart(fig_pie, use_container_width=True, config=chart_config)
+            fig_pie.update_layout(**PLOTLY_LAYOUT, height=320, title_font_color="#e8edf2")
+            st.plotly_chart(fig_pie, use_container_width=True, config=CHART_CONFIG)
 
         with st.expander("Raw monthly data"):
             st.json(spending)
+
+    # ---- Item rankings / movers ----
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-label">Item rankings · selected month vs prior</div>',
+        unsafe_allow_html=True,
+    )
+    st.subheader("Movers")
+    movers = datastore.get_item_movers(selected, prev_key, top_n=8)
+
+    col_top, col_up, col_down = st.columns(3)
+
+    def _rank_block(title: str, items: list, mode: str):
+        st.markdown(f"**{title}**")
+        if not items:
+            st.caption("No data yet.")
+            return
+        for i, m in enumerate(items, 1):
+            if mode == "top":
+                badge = f"#{m['current_rank']}"
+                badge_cls = "rank-num"
+            elif mode == "up":
+                if m["previous_rank"] is None:
+                    badge = "NEW"
+                    badge_cls = "rank-new"
+                else:
+                    badge = f"↑{m['rank_delta']}"
+                    badge_cls = "rank-up"
+            else:
+                badge = f"↓{abs(m['rank_delta'] or 0)}"
+                badge_cls = "rank-down"
+            st.markdown(
+                f'<div class="rank-row">'
+                f'<span class="{badge_cls}">{badge}</span>'
+                f'<span style="flex:1">{m["name"]}</span>'
+                f'<span style="font-family:IBM Plex Mono,monospace;color:#8ab">${m["current_spend"]:.2f}</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    with col_top:
+        _rank_block(f"Top spend · {_month_label(selected)}", movers["current_top"], "top")
+    with col_up:
+        _rank_block("Rising", movers["rising"], "up")
+    with col_down:
+        _rank_block("Falling", movers["falling"], "down")
 
 # ---------------------------------------------------------------------------
 # Shopping List
@@ -252,7 +540,6 @@ elif page == "Shopping List":
     st.caption("Items bought on at least the selected % of trips (food and non-food).")
 
     threshold = st.slider("Frequency threshold (%)", min_value=10, max_value=100, value=30, step=5)
-
     items = datastore.get_shopping_list(threshold=float(threshold))
 
     if not items:
@@ -266,7 +553,7 @@ elif page == "Shopping List":
                     "Frequency": f"{i['frequency_pct']}%",
                     "Avg qty": i["avg_qty"],
                     "Avg price": f"${i['avg_price']:.2f}",
-                    "Stores": ", ".join(i["stores"]),
+                    "Stores": ", ".join(datastore.display_store(s) for s in i["stores"]),
                     "Last bought": i["last_bought"],
                 }
                 for i in items
@@ -287,7 +574,9 @@ elif page == "Shopping List":
                     "Frequency": f"{i['frequency_pct']}%",
                     "Avg qty": i["avg_qty"],
                     "Avg price": f"${i['avg_price']:.2f}",
+                    "Stores": ", ".join(datastore.display_store(s) for s in i["stores"]),
                     "Last bought": i["last_bought"],
+                    "Food": "Yes" if i.get("is_food", True) else "No",
                 }
                 for i in all_freq
             ],
@@ -300,38 +589,32 @@ elif page == "Shopping List":
 # ---------------------------------------------------------------------------
 elif page == "Receipts":
     st.title("Stored Receipts")
-    st.caption(
-        "**Reconciled** means the sum of parsed line items matches the printed subtotal. "
-        "If it does not, OCR or the parser may have missed a line — totals can still be useful."
-    )
     receipts = datastore.load_receipts()
     if not receipts:
         st.info("No receipts stored yet.")
     else:
-        for i, r in enumerate(reversed(receipts)):
-            trip_key = r.get("trip_id") or r.get("filename") or r.get("date")
-            ok = r.get("reconciled")
-            badge = "✅" if ok else "❌ not reconciled"
-            label = (
-                f"{r.get('date', '?')} · {r.get('store', '?').title()} · "
-                f"${r.get('total', r.get('subtotal', 0)):.2f} · {badge} · "
-                f"{r.get('filename', '')}"
-            )
-            with st.expander(label, expanded=(i == 0 and not ok)):
-                c1, c2, c3, c4 = st.columns(4)
-                c1.write(f"**Subtotal:** ${r.get('subtotal', 0):.2f}")
-                c2.write(f"**Tax:** ${r.get('tax', 0):.2f}")
-                c3.write(f"**Total:** ${r.get('total', 0):.2f}")
-                c4.write(f"**Reconciled:** {badge}")
+        for i, r in enumerate(sorted(receipts, key=lambda x: x.get("date", ""), reverse=True)):
+            store_disp = datastore.display_store(r.get("store", ""))
+            trip_key = r.get("trip_id") or r.get("filename") or str(i)
+            with st.expander(
+                f"{r.get('date', '?')} · {store_disp} · "
+                f"${float(r.get('total') or 0):.2f} · `{trip_key}`"
+            ):
                 rows = []
-                for it in r.get("items", []):
+                for item in r.get("items", []):
                     rows.append({
-                        "Name": it.get("name"),
-                        "Qty": it.get("qty"),
-                        "Unit": it.get("unit_price"),
-                        "Line total": it.get("line_total"),
+                        "Item": item.get("name"),
+                        "Qty": item.get("qty"),
+                        "Line total": f"${float(item.get('line_total') or 0):.2f}",
+                        "Food": "Yes" if item.get("is_food", True) else "No",
                     })
                 st.dataframe(rows, use_container_width=True, hide_index=True)
+                st.caption(
+                    f"Subtotal ${float(r.get('subtotal') or 0):.2f} · "
+                    f"Tax ${float(r.get('tax') or 0):.2f} · "
+                    f"Total ${float(r.get('total') or 0):.2f} · "
+                    f"Reconciled: {r.get('reconciled')}"
+                )
                 del_key = f"del_{trip_key}_{i}"
                 if st.button("Delete this receipt", key=del_key, type="secondary"):
                     if datastore.delete_receipt(str(trip_key)):
@@ -341,7 +624,7 @@ elif page == "Receipts":
                         st.error("Could not find that receipt to delete.")
 
 # ---------------------------------------------------------------------------
-# Upload (text, photo, PDF + Gemini OCR)
+# Upload
 # ---------------------------------------------------------------------------
 elif page == "Upload":
     import ocr as ocr_mod
@@ -352,7 +635,11 @@ elif page == "Upload":
         "Review the text before storing."
     )
 
-    store = st.selectbox("Store", ["aldi", "kroger"])
+    store = st.selectbox(
+        "Store",
+        ["aldi", "kroger"],
+        format_func=lambda s: datastore.display_store(s),
+    )
     if ocr_mod.has_api_key():
         st.success("Gemini API key found — photo/PDF OCR is available.", icon="✅")
     else:
@@ -380,7 +667,10 @@ elif page == "Upload":
             filename = uploaded.name
             detected = detect_store_from_name(filename)
             if detected and detected != store:
-                st.warning(f"Filename suggests store={detected}; you selected {store}.")
+                st.warning(
+                    f"Filename suggests store={datastore.display_store(detected)}; "
+                    f"you selected {datastore.display_store(store)}."
+                )
             data = uploaded.getvalue()
             lower = filename.lower()
             if lower.endswith(".txt"):
@@ -404,7 +694,6 @@ elif page == "Upload":
             filename = "pasted.txt"
             source = "text"
 
-    # OCR step for images / PDFs
     if source == "image" and raw_bytes is not None:
         if st.button("Run OCR", type="primary", key="run_ocr"):
             if not ocr_mod.has_api_key():
@@ -432,7 +721,6 @@ elif page == "Upload":
             key="final_text",
         )
 
-        # Preview parse so we can warn on reconcile failure before storing
         preview = None
         preview_err = None
         try:
@@ -453,56 +741,34 @@ elif page == "Upload":
                 st.warning(
                     "**Does not reconcile.** The sum of parsed lines does not match the "
                     "printed subtotal — a line may be missing or misread. "
-                    "You can still include it (uses the printed total for spend) or discard and fix the text."
+                    "You can still store it, or edit the text and try again."
                 )
-                c_inc, c_disc = st.columns(2)
-                with c_inc:
-                    if st.button("Include anyway", type="primary", key="include_unrec"):
-                        datastore.add_receipt(preview)
-                        st.session_state.pop("ocr_text", None)
-                        st.session_state.pop("ocr_filename", None)
-                        st.success(
-                            f"Stored {preview['filename']} (not reconciled): "
-                            f"{len(preview['items'])} items, total ${preview['total']:.2f}"
-                        )
-                        st.rerun()
-                with c_disc:
-                    if st.button("Discard", type="secondary", key="discard_unrec"):
-                        st.session_state.pop("ocr_text", None)
-                        st.session_state.pop("ocr_filename", None)
-                        st.info("Discarded. Edit the text above and try again.")
-                        st.rerun()
+                choice = st.radio(
+                    "What do you want to do?",
+                    ["Include anyway", "Discard"],
+                    horizontal=True,
+                    key="reconcile_choice",
+                )
             else:
-                if st.button("Parse & store", type="primary", key="parse_store"):
-                    try:
-                        datastore.add_receipt(preview)
-                        st.session_state.pop("ocr_text", None)
-                        st.session_state.pop("ocr_filename", None)
-                        st.success(
-                            f"Stored {preview['filename']}: {len(preview['items'])} items, "
-                            f"total ${preview['total']:.2f}, reconciled=True"
-                        )
-                        with st.expander("Parsed items"):
-                            st.dataframe(
-                                [
-                                    {
-                                        "Name": it["name"],
-                                        "Qty": it["qty"],
-                                        "Line total": it["line_total"],
-                                        "Key": it.get("item_key"),
-                                    }
-                                    for it in preview["items"]
-                                ],
-                                use_container_width=True,
-                                hide_index=True,
-                            )
-                    except Exception as e:
-                        st.error(f"Parse/store failed: {e}")
-                        st.exception(e)
+                st.success("Reconciles — line sum matches printed subtotal.")
+                choice = "Include anyway"
 
+            if choice == "Include anyway" and st.button("Store receipt", type="primary"):
+                try:
+                    datastore.add_receipt(preview)
+                    st.success(
+                        f"Stored {datastore.display_store(store)} receipt "
+                        f"({preview['date']}) — ${preview['total']:.2f}"
+                    )
+                    for k in ("ocr_text", "ocr_filename"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Parse/store failed: {e}")
+                    st.exception(e)
 
 # ---------------------------------------------------------------------------
-# Backup / restore (survives Streamlit Cloud restarts)
+# Backup
 # ---------------------------------------------------------------------------
 elif page == "Backup":
     st.title("Backup & Restore")
@@ -535,8 +801,12 @@ after idle timeouts. Use this page to keep a local copy of your data.
     with col_b:
         st.subheader("Import")
         up = st.file_uploader("Backup JSON", type=["json"])
-        mode = st.radio("Mode", ["replace", "merge"], horizontal=True,
-                        help="replace = wipe current data first; merge = add only new trip_ids")
+        mode = st.radio(
+            "Mode",
+            ["replace", "merge"],
+            horizontal=True,
+            help="replace = wipe current data first; merge = add only new trip_ids",
+        )
         if up is not None and st.button("Restore from backup", type="primary"):
             try:
                 import json
@@ -555,8 +825,10 @@ after idle timeouts. Use this page to keep a local copy of your data.
         st.info("Nothing stored yet.")
     else:
         for r in sorted(receipts, key=lambda x: x.get("date", "")):
-            food = sum(i["line_total"] for i in r.get("items", []) if i.get("is_food", True))
+            food = sum(
+                i["line_total"] for i in r.get("items", []) if i.get("is_food", True)
+            )
             st.write(
-                f"- **{r.get('date')}** · {r.get('store')} · "
+                f"- **{r.get('date')}** · {datastore.display_store(r.get('store'))} · "
                 f"food ${food:.2f} · `{r.get('filename')}`"
             )
