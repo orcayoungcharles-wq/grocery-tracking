@@ -519,8 +519,6 @@ if page == "Dashboard":
                             fig_p, use_container_width=True, config=CHART_CONFIG
                         )
 
-            with st.expander("Raw weekly data"):
-                st.json(weekly)
     else:
         # Calendar-month bars
         months_list = list(spending.keys())
@@ -594,9 +592,6 @@ if page == "Dashboard":
                         fig_p, use_container_width=True, config=CHART_CONFIG
                     )
 
-        with st.expander("Raw monthly data"):
-            st.json(spending)
-
     # ---- Extra series: trips, basket, cumulative, sparklines ----
     st.markdown("---")
     st.markdown(
@@ -634,7 +629,7 @@ if page == "Dashboard":
                 fig_b = px.bar(
                     x=labels,
                     y=baskets,
-                    title="Avg basket size ($)",
+                    title="Avg $/trip (basket)",
                     text=[f"${v:.0f}" for v in baskets],
                     labels={"x": "", "y": "USD"},
                 )
@@ -678,7 +673,7 @@ if page == "Dashboard":
                 fig_b = px.bar(
                     x=labels,
                     y=baskets,
-                    title="Avg basket size ($)",
+                    title="Avg $/trip (basket)",
                     text=[f"${v:.0f}" for v in baskets],
                     labels={"x": "", "y": "USD"},
                 )
@@ -746,20 +741,34 @@ if page == "Dashboard":
                         hovertemplate="%{x}: $%{y:.2f}<extra></extra>",
                     )
                 )
+                # Show a few x labels (first, mid, last) so time is readable
+                n = len(item["weeks"])
+                tick_idx = sorted(set([0, n // 2, n - 1])) if n else []
+                tick_vals = [item["weeks"][j] for j in tick_idx if j < n]
                 fig_s.update_layout(
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(
                         family="IBM Plex Sans, sans-serif", color="#c8d0da", size=10
                     ),
-                    height=130,
-                    margin=dict(t=28, b=24, l=28, r=8),
+                    height=150,
+                    margin=dict(t=36, b=32, l=28, r=8),
                     title=dict(
-                        text=f"{item['name']}  ·  ${item['total_spend']:.2f}",
+                        text=(
+                            f"{item['name']}  ·  "
+                            f"${item['total_spend']:.2f} total  ·  "
+                            f"${item.get('avg_per_month', 0):.2f}/mo"
+                        ),
                         font=dict(size=11, color="#a8b8c8"),
                     ),
                     showlegend=False,
-                    xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                    xaxis=dict(
+                        showgrid=False,
+                        zeroline=False,
+                        tickmode="array",
+                        tickvals=tick_vals,
+                        tickfont=dict(size=9, color="#6a7a8a"),
+                    ),
                     yaxis=dict(
                         showgrid=True,
                         gridcolor="#1a2332",
@@ -771,54 +780,6 @@ if page == "Dashboard":
                 st.plotly_chart(fig_s, use_container_width=True, config=CHART_CONFIG)
     else:
         st.caption("Not enough item history for sparklines yet.")
-
-    # ---- Item rankings (AP Top-25 style) ----
-    st.markdown("---")
-    st.markdown(
-        '<div class="section-label">Item rankings · selected month vs prior</div>',
-        unsafe_allow_html=True,
-    )
-    st.subheader(f"Top items · {_month_label(selected)}")
-    movers = datastore.get_item_movers(selected, prev_key, top_n=15)
-    top_items = movers["current_top"]
-
-    if not top_items:
-        st.caption("No item data for this month yet.")
-    else:
-        # Header row
-        st.markdown(
-            '<div class="rank-row" style="color:#6a7a8a;font-size:0.72rem;'
-            'text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid #2a3545;">'
-            '<span class="rank-num">#</span>'
-            '<span style="flex:1">Item</span>'
-            '<span style="min-width:4.5rem;text-align:right;margin-right:1rem;">Spend</span>'
-            '<span style="min-width:3.2rem;text-align:right;">Trend</span>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        for m in top_items:
-            rank = m.get("current_rank") or "—"
-            rd = m.get("rank_delta")
-            prev_r = m.get("previous_rank")
-            if prev_r is None:
-                trend_html = '<span class="rank-new">NEW</span>'
-            elif rd is None or rd == 0:
-                trend_html = '<span style="color:#6a7a8a;">—</span>'
-            elif rd > 0:
-                trend_html = f'<span class="rank-up">↑{rd}</span>'
-            else:
-                trend_html = f'<span class="rank-down">↓{abs(rd)}</span>'
-            st.markdown(
-                f'<div class="rank-row">'
-                f'<span class="rank-num">{rank}</span>'
-                f'<span style="flex:1">{m["name"]}</span>'
-                f'<span style="min-width:4.5rem;text-align:right;margin-right:1rem;'
-                f'font-family:IBM Plex Mono,monospace;color:#a8b8c8;">'
-                f'${m["current_spend"]:.2f}</span>'
-                f'<span style="min-width:3.2rem;text-align:right;">{trend_html}</span>'
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
 # ---------------------------------------------------------------------------
 # Shopping List
@@ -849,6 +810,76 @@ elif page == "Shopping List":
             use_container_width=True,
             hide_index=True,
         )
+
+    # ---- Weekly item rankings (between frequency list and all frequencies) ----
+    st.markdown("---")
+    st.markdown(
+        '<div class="section-label">Weekly item rankings</div>',
+        unsafe_allow_html=True,
+    )
+    st.subheader("Top items by week")
+
+    week_keys = datastore.get_available_weeks()
+    if not week_keys:
+        st.caption("No weekly data yet.")
+    else:
+        # Default to most recent week
+        default_idx = len(week_keys) - 1
+        selected_week = st.selectbox(
+            "Week",
+            options=week_keys,
+            index=default_idx,
+            format_func=lambda k: datastore.get_weekly_spending(max_weeks=None)
+            .get(k, {})
+            .get("label", k),
+            key="rank_week_select",
+        )
+        ranking_payload = datastore.get_weekly_item_rankings(selected_week, top_n=15)
+        ranks = ranking_payload["rankings"]
+        prev_lbl = ranking_payload.get("previous_label")
+        if prev_lbl:
+            st.caption(f"Compared to {prev_lbl}")
+
+        if not ranks:
+            st.caption("No items in this week.")
+        else:
+            table = []
+            for m in ranks:
+                rd = m.get("rank_delta")
+                pr = m.get("previous_rank")
+                if pr is None:
+                    trend = "NEW"
+                elif rd is None or rd == 0:
+                    trend = "—"
+                elif rd > 0:
+                    trend = f"↑{rd}"
+                else:
+                    trend = f"↓{abs(rd)}"
+
+                pd = m.get("price_delta")
+                if pd is None:
+                    price_move = "—"
+                elif pd > 0:
+                    price_move = f"↑${pd:.2f}"
+                elif pd < 0:
+                    price_move = f"↓${abs(pd):.2f}"
+                else:
+                    price_move = "—"
+
+                unit = m.get("avg_unit_price")
+                table.append({
+                    "#": m.get("current_rank"),
+                    "Trend": trend,
+                    "Item": m.get("name"),
+                    "Week $": f"${m.get('week_spend', 0):.2f}",
+                    "Month $": f"${m.get('month_spend', 0):.2f}",
+                    "Trips": m.get("times_bought", 0),
+                    "Avg qty/trip": m.get("avg_qty_per_trip", 0),
+                    "Unit $": f"${unit:.2f}" if unit is not None else "—",
+                    "Price Δ": price_move,
+                    "Last": m.get("last_bought") or "—",
+                })
+            st.dataframe(table, use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.subheader("All item frequencies")

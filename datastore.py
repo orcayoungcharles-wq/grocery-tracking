@@ -565,8 +565,8 @@ def get_receipts_in_month(month_key: str):
 
 def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
     """
-    Rank items by spend in current_key vs previous_key.
-    Returns dict with rising, falling, and current_top lists.
+    Rank items by spend in current_key vs previous_key (YYYY-MM month keys).
+    Kept for compatibility; prefer get_weekly_item_rankings for the UI.
     """
     from collections import defaultdict
 
@@ -603,7 +603,7 @@ def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
         delta = round(data["spend"] - prev_spend, 2)
         rank_delta = None
         if pr is not None and cr is not None:
-            rank_delta = pr - cr  # positive = moved up the chart
+            rank_delta = pr - cr
         movers.append({
             "item_key": key,
             "name": data["name"],
@@ -623,7 +623,10 @@ def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
             if (m["rank_delta"] is not None and m["rank_delta"] > 0)
             or m["previous_rank"] is None
         ],
-        key=lambda m: (-(m["rank_delta"] if m["rank_delta"] is not None else 99), -m["current_spend"]),
+        key=lambda m: (
+            -(m["rank_delta"] if m["rank_delta"] is not None else 99),
+            -m["current_spend"],
+        ),
     )[:top_n]
 
     falling = sorted(
@@ -639,6 +642,166 @@ def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
         "current_top": current_top,
         "current_key": current_key,
         "previous_key": previous_key,
+    }
+
+
+def get_available_weeks():
+    """ISO week keys that have receipts, oldest → newest."""
+    return list(get_weekly_spending(max_weeks=None).keys())
+
+
+def get_weekly_item_rankings(week_key: str, top_n: int = 15):
+    """
+    College-style weekly rankings for items by spend in that ISO week.
+
+    Returns {
+      week_key, previous_week_key, label, previous_label,
+      rankings: [ {
+        item_key, name,
+        current_rank, previous_rank, rank_delta,
+        week_spend, month_spend,
+        times_bought, avg_qty_per_trip, avg_unit_price,
+        price_delta,  # latest unit price - earliest (all-time)
+        last_bought,
+      }, ...]
+    }
+    """
+    from collections import defaultdict
+    from datetime import datetime as dt
+
+    weekly = get_weekly_spending(max_weeks=None)
+    week_keys = list(weekly.keys())
+    if week_key not in week_keys:
+        return {
+            "week_key": week_key,
+            "previous_week_key": None,
+            "label": week_key,
+            "previous_label": None,
+            "rankings": [],
+        }
+
+    idx = week_keys.index(week_key)
+    prev_week = week_keys[idx - 1] if idx > 0 else None
+    label = weekly[week_key].get("label", week_key)
+    prev_label = weekly[prev_week].get("label", prev_week) if prev_week else None
+
+    # Per-item aggregates
+    # week spend / qty / trips; also all-time for price trend & lifetime trips
+    week_data = defaultdict(lambda: {
+        "spend": 0.0, "qty": 0.0, "trips": set(), "name": "", "unit_prices": []
+    })
+    prev_data = defaultdict(lambda: {
+        "spend": 0.0, "qty": 0.0, "trips": set(), "name": ""
+    })
+    # lifetime
+    life = defaultdict(lambda: {
+        "spend": 0.0, "qty": 0.0, "trips": set(), "name": "",
+        "unit_prices": [], "dates": [], "month_spend": defaultdict(float),
+    })
+
+    def _iso_week(d_str: str) -> str | None:
+        try:
+            d = dt.strptime(d_str, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        iso = d.isocalendar()
+        return f"{iso.year}-W{iso.week:02d}"
+
+    for entry in load_item_history():
+        d_str = entry.get("date") or ""
+        wk = _iso_week(d_str)
+        key = entry.get("item_key") or entry.get("name")
+        name = entry.get("name") or key
+        qty = float(entry.get("qty") or 0)
+        price = float(entry.get("price") or 0)
+        trip = entry.get("trip_id") or d_str
+        unit = (price / qty) if qty else price
+
+        life[key]["spend"] = round(life[key]["spend"] + price, 2)
+        life[key]["qty"] = round(life[key]["qty"] + qty, 2)
+        life[key]["trips"].add(trip)
+        life[key]["name"] = name
+        life[key]["unit_prices"].append((d_str, unit))
+        life[key]["dates"].append(d_str)
+        if len(d_str) >= 7:
+            life[key]["month_spend"][d_str[:7]] = round(
+                life[key]["month_spend"][d_str[:7]] + price, 2
+            )
+
+        if wk == week_key:
+            week_data[key]["spend"] = round(week_data[key]["spend"] + price, 2)
+            week_data[key]["qty"] = round(week_data[key]["qty"] + qty, 2)
+            week_data[key]["trips"].add(trip)
+            week_data[key]["name"] = name
+            week_data[key]["unit_prices"].append(unit)
+        elif prev_week and wk == prev_week:
+            prev_data[key]["spend"] = round(prev_data[key]["spend"] + price, 2)
+            prev_data[key]["qty"] = round(prev_data[key]["qty"] + qty, 2)
+            prev_data[key]["trips"].add(trip)
+            prev_data[key]["name"] = name
+
+    def ranked_keys(data_map):
+        return sorted(data_map.keys(), key=lambda k: -data_map[k]["spend"])
+
+    cur_order = ranked_keys(week_data)
+    prev_order = ranked_keys(prev_data)
+    cur_rank = {k: i + 1 for i, k in enumerate(cur_order)}
+    prev_rank = {k: i + 1 for i, k in enumerate(prev_order)}
+
+    # Month containing this week's Monday (approx via week_start)
+    month_key = None
+    ws = weekly[week_key].get("week_start")
+    if ws and len(ws) >= 7:
+        month_key = ws[:7]
+
+    rankings = []
+    for key in cur_order[:top_n]:
+        wd = week_data[key]
+        ld = life[key]
+        trips_life = len(ld["trips"])
+        trips_week = len(wd["trips"])
+        avg_qty = round(ld["qty"] / trips_life, 2) if trips_life else 0.0
+        # avg unit price this week
+        avg_unit = (
+            round(sum(wd["unit_prices"]) / len(wd["unit_prices"]), 2)
+            if wd["unit_prices"]
+            else None
+        )
+        # price movement: last vs first recorded unit price
+        price_delta = None
+        ups = sorted(ld["unit_prices"], key=lambda x: x[0])
+        if len(ups) >= 2 and ups[0][1] and ups[-1][1]:
+            price_delta = round(ups[-1][1] - ups[0][1], 2)
+        last_bought = max(ld["dates"]) if ld["dates"] else None
+        month_spend = ld["month_spend"].get(month_key, 0.0) if month_key else 0.0
+
+        cr = cur_rank.get(key)
+        pr = prev_rank.get(key)
+        rank_delta = (pr - cr) if (pr is not None and cr is not None) else None
+
+        rankings.append({
+            "item_key": key,
+            "name": wd["name"] or ld["name"] or key,
+            "current_rank": cr,
+            "previous_rank": pr,
+            "rank_delta": rank_delta,
+            "week_spend": wd["spend"],
+            "month_spend": month_spend,
+            "times_bought": trips_life,
+            "times_this_week": trips_week,
+            "avg_qty_per_trip": avg_qty,
+            "avg_unit_price": avg_unit,
+            "price_delta": price_delta,
+            "last_bought": last_bought,
+            "lifetime_spend": ld["spend"],
+        })
+
+    return {
+        "week_key": week_key,
+        "previous_week_key": prev_week,
+        "label": label,
+        "previous_label": prev_label,
+        "rankings": rankings,
     }
 
 
@@ -693,11 +856,18 @@ def get_monthly_trip_and_basket():
 
 def get_cumulative_month_spend(month_key: str):
     """
-    Running total of spend within a calendar month, by receipt date.
-    Returns list of {date, daily, cumulative} sorted by date.
-    Multiple trips same day are summed into daily.
+    Running total of spend within a calendar month.
+    Always starts at day 1 of the month (cumulative $0) so the line
+    anchors to the start of the month, then steps up on trip days.
+    Returns list of {date, daily, cumulative}.
     """
     from collections import defaultdict
+    from calendar import monthrange
+
+    try:
+        year, month = int(month_key[:4]), int(month_key[5:7])
+    except (ValueError, IndexError):
+        return []
 
     by_day: dict = defaultdict(float)
     for r in get_receipts_in_month(month_key):
@@ -705,11 +875,25 @@ def get_cumulative_month_spend(month_key: str):
         if not d:
             continue
         by_day[d] = round(by_day[d] + _receipt_spend(r), 2)
+
+    # End at last trip day or today (if current month), not full empty tail
+    last_day = monthrange(year, month)[1]
+    today = datetime.utcnow().date()
+    if year == today.year and month == today.month:
+        end_day = min(last_day, today.day)
+    elif by_day:
+        end_day = max(int(d[8:10]) for d in by_day.keys())
+    else:
+        end_day = 1
+
     running = 0.0
     out = []
-    for d in sorted(by_day.keys()):
-        running = round(running + by_day[d], 2)
-        out.append({"date": d, "daily": by_day[d], "cumulative": running})
+    for day in range(1, end_day + 1):
+        d = f"{year:04d}-{month:02d}-{day:02d}"
+        daily = by_day.get(d, 0.0)
+        running = round(running + daily, 2)
+        # Include day-1 always; later days only if trip or we want continuous line
+        out.append({"date": d, "daily": daily, "cumulative": running})
     return out
 
 
@@ -717,28 +901,39 @@ def get_top_item_sparklines(top_n: int = 6, max_weeks: int = 8):
     """
     Top items by recent spend with weekly spend series for sparklines.
     Returns list of {
-      item_key, name, total_spend,
-      weeks: [week_label, ...],
-      series: [spend_week_0, ...]  # aligned to weeks
+      item_key, name, total_spend, avg_per_month,
+      weeks: [short label, ...],  # e.g. "Sep 28"
+      series: [spend_week_0, ...]
     }
     """
     from collections import defaultdict
-    from datetime import datetime as dt, timedelta
+    from datetime import datetime as dt
 
     weekly = get_weekly_spending(max_weeks=max_weeks)
     week_keys = list(weekly.keys())
     if not week_keys:
         return []
 
-    # Map each ISO week key to index
     week_index = {k: i for i, k in enumerate(week_keys)}
-    labels = [weekly[k].get("label", k) for k in week_keys]
+    # Short labels from week_start when available
+    labels = []
+    for k in week_keys:
+        ws = weekly[k].get("week_start")
+        if ws:
+            try:
+                d = dt.strptime(ws, "%Y-%m-%d")
+                labels.append(d.strftime("%b %-d") if hasattr(d, "strftime") else d.strftime("%b %d").replace(" 0", " "))
+                # Windows/Linux: prefer no leading zero
+                labels[-1] = d.strftime("%b ") + str(d.day)
+            except ValueError:
+                labels.append(weekly[k].get("label", k))
+        else:
+            labels.append(weekly[k].get("label", k))
 
-    # Aggregate item spend per week
-    # item_key -> list of spends aligned to week_keys
     series_map: dict = defaultdict(lambda: [0.0] * len(week_keys))
     names: dict = {}
     totals: dict = defaultdict(float)
+    months_seen: dict = defaultdict(set)
 
     for entry in load_item_history():
         d_str = entry.get("date") or ""
@@ -756,14 +951,17 @@ def get_top_item_sparklines(top_n: int = 6, max_weeks: int = 8):
         series_map[key][idx] = round(series_map[key][idx] + amt, 2)
         totals[key] = round(totals[key] + amt, 2)
         names[key] = entry.get("name") or key
+        months_seen[key].add(d_str[:7])
 
     ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:top_n]
     out = []
     for key, total in ranked:
+        n_months = len(months_seen.get(key) or []) or 1
         out.append({
             "item_key": key,
             "name": names.get(key, key),
             "total_spend": total,
+            "avg_per_month": round(total / n_months, 2),
             "weeks": labels,
             "series": series_map[key],
         })
