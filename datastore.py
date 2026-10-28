@@ -439,19 +439,24 @@ def import_bundle(bundle: dict, mode: str = "replace") -> int:
     return len(load_receipts())
 
 
-def get_weekly_spending(max_weeks: int | None = None):
+def get_weekly_spending(max_weeks: int | None = None, fill_gaps: bool = True):
     """
     Aggregate full spend by ISO week.
     Returns ordered dict keyed by ISO week id, each value:
       {label, total, by_store, trips, week_start}
     label looks like "Week of Oct 6".
-    If max_weeks is set, only the most recent N weeks are returned.
+
+    If max_weeks is set, returns the most recent N *calendar* ISO weeks
+    ending this week (includes $0 / 0-trip weeks when fill_gaps=True so
+    bars, pies, and trip charts stay aligned).
     """
     from collections import defaultdict
-    from datetime import datetime as dt, timedelta
+    from datetime import datetime as dt, timedelta, date
 
     receipts = load_receipts()
-    weeks: dict = defaultdict(lambda: {"total": 0.0, "by_store": {}, "trips": 0, "week_start": None})
+    weeks: dict = defaultdict(
+        lambda: {"total": 0.0, "by_store": {}, "trips": 0, "week_start": None}
+    )
 
     for r in receipts:
         try:
@@ -460,7 +465,6 @@ def get_weekly_spending(max_weeks: int | None = None):
             continue
         iso = d.isocalendar()
         key = f"{iso.year}-W{iso.week:02d}"
-        # Monday of that ISO week
         week_start = d - timedelta(days=d.weekday())
         amount = _receipt_spend(r)
         store = r.get("store", "unknown")
@@ -472,16 +476,49 @@ def get_weekly_spending(max_weeks: int | None = None):
         if weeks[key]["week_start"] is None or week_start < weeks[key]["week_start"]:
             weeks[key]["week_start"] = week_start
 
+    def _label(ws):
+        if ws is None:
+            return ""
+        if isinstance(ws, str):
+            try:
+                ws = dt.strptime(ws, "%Y-%m-%d").date()
+            except ValueError:
+                return str(ws)
+        return f"Week of {ws.strftime('%b')} {ws.day}"
+
+    if max_weeks is not None and max_weeks > 0 and fill_gaps:
+        # Continuous window: this week's Monday back max_weeks-1
+        today = date.today()
+        this_monday = today - timedelta(days=today.weekday())
+        ordered = {}
+        for i in range(max_weeks - 1, -1, -1):
+            ws = this_monday - timedelta(weeks=i)
+            iso = ws.isocalendar()
+            key = f"{iso.year}-W{iso.week:02d}"
+            if key in weeks:
+                payload = dict(weeks[key])
+                if payload["week_start"] is None:
+                    payload["week_start"] = ws
+            else:
+                payload = {
+                    "total": 0.0,
+                    "by_store": {},
+                    "trips": 0,
+                    "week_start": ws,
+                }
+            payload["label"] = _label(payload["week_start"])
+            ws_val = payload["week_start"]
+            payload["week_start"] = (
+                ws_val.isoformat() if hasattr(ws_val, "isoformat") else ws_val
+            )
+            ordered[key] = payload
+        return ordered
+
     ordered = dict(sorted(weeks.items()))
-    # Attach friendly labels
     for key, payload in ordered.items():
         ws = payload.get("week_start")
-        if ws:
-            payload["label"] = f"Week of {ws.strftime('%b')} {ws.day}"
-        else:
-            payload["label"] = key
-        # JSON-serializable
-        payload["week_start"] = ws.isoformat() if ws else None
+        payload["label"] = _label(ws) if ws else key
+        payload["week_start"] = ws.isoformat() if ws and hasattr(ws, "isoformat") else ws
 
     if max_weeks is not None and max_weeks > 0:
         keys = list(ordered.keys())[-max_weeks:]
@@ -646,32 +683,31 @@ def get_item_movers(current_key: str, previous_key: str, top_n: int = 10):
 
 
 def get_available_weeks():
-    """ISO week keys that have receipts, oldest → newest."""
-    return list(get_weekly_spending(max_weeks=None).keys())
+    """ISO week keys that have at least one receipt, oldest → newest."""
+    weekly = get_weekly_spending(max_weeks=None, fill_gaps=False)
+    return [k for k, v in weekly.items() if (v.get("trips") or 0) > 0]
 
 
 def get_weekly_item_rankings(week_key: str, top_n: int = 15):
     """
-    College-style weekly rankings for items by spend in that ISO week.
+    Rank items by **spend in that ISO week** (highest $ = #1).
 
-    Returns {
-      week_key, previous_week_key, label, previous_label,
-      rankings: [ {
-        item_key, name,
-        current_rank, previous_rank, rank_delta,
-        week_spend, month_spend,
-        times_bought, avg_qty_per_trip, avg_unit_price,
-        price_delta,  # latest unit price - earliest (all-time)
-        last_bought,
-      }, ...]
-    }
+    Trend compares each item to the most recent *prior week where that
+    item was purchased* (not an empty gap week), so arrows show up even
+    when you skip a week of shopping.
+
+    Returns rankings rows with week/month spend, trips, qty, unit price, etc.
     """
     from collections import defaultdict
     from datetime import datetime as dt
 
-    weekly = get_weekly_spending(max_weeks=None)
-    week_keys = list(weekly.keys())
-    if week_key not in week_keys:
+    weekly = get_weekly_spending(max_weeks=None, fill_gaps=False)
+    # Only weeks that actually had trips, for stable prev comparison
+    active_weeks = [k for k, v in weekly.items() if (v.get("trips") or 0) > 0]
+    if week_key not in active_weeks:
+        # allow lookup even if somehow missing
+        active_weeks = list(weekly.keys())
+    if week_key not in weekly and week_key not in active_weeks:
         return {
             "week_key": week_key,
             "previous_week_key": None,
@@ -680,20 +716,20 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
             "rankings": [],
         }
 
-    idx = week_keys.index(week_key)
-    prev_week = week_keys[idx - 1] if idx > 0 else None
-    label = weekly[week_key].get("label", week_key)
-    prev_label = weekly[prev_week].get("label", prev_week) if prev_week else None
+    idx = active_weeks.index(week_key) if week_key in active_weeks else -1
+    prev_week = active_weeks[idx - 1] if idx > 0 else None
+    label = weekly.get(week_key, {}).get("label", week_key)
+    prev_label = (
+        weekly.get(prev_week, {}).get("label", prev_week) if prev_week else None
+    )
 
-    # Per-item aggregates
-    # week spend / qty / trips; also all-time for price trend & lifetime trips
     week_data = defaultdict(lambda: {
         "spend": 0.0, "qty": 0.0, "trips": set(), "name": "", "unit_prices": []
     })
-    prev_data = defaultdict(lambda: {
-        "spend": 0.0, "qty": 0.0, "trips": set(), "name": ""
-    })
-    # lifetime
+    # spend by item by week — for "last time this item was bought" ranks
+    item_week_spend = defaultdict(lambda: defaultdict(float))
+    item_week_name = {}
+
     life = defaultdict(lambda: {
         "spend": 0.0, "qty": 0.0, "trips": set(), "name": "",
         "unit_prices": [], "dates": [], "month_spend": defaultdict(float),
@@ -710,6 +746,8 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
     for entry in load_item_history():
         d_str = entry.get("date") or ""
         wk = _iso_week(d_str)
+        if not wk:
+            continue
         key = entry.get("item_key") or entry.get("name")
         name = entry.get("name") or key
         qty = float(entry.get("qty") or 0)
@@ -728,31 +766,35 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
                 life[key]["month_spend"][d_str[:7]] + price, 2
             )
 
+        item_week_spend[key][wk] = round(item_week_spend[key][wk] + price, 2)
+        item_week_name[key] = name
+
         if wk == week_key:
             week_data[key]["spend"] = round(week_data[key]["spend"] + price, 2)
             week_data[key]["qty"] = round(week_data[key]["qty"] + qty, 2)
             week_data[key]["trips"].add(trip)
             week_data[key]["name"] = name
             week_data[key]["unit_prices"].append(unit)
-        elif prev_week and wk == prev_week:
-            prev_data[key]["spend"] = round(prev_data[key]["spend"] + price, 2)
-            prev_data[key]["qty"] = round(prev_data[key]["qty"] + qty, 2)
-            prev_data[key]["trips"].add(trip)
-            prev_data[key]["name"] = name
 
     def ranked_keys(data_map):
         return sorted(data_map.keys(), key=lambda k: -data_map[k]["spend"])
 
     cur_order = ranked_keys(week_data)
-    prev_order = ranked_keys(prev_data)
     cur_rank = {k: i + 1 for i, k in enumerate(cur_order)}
-    prev_rank = {k: i + 1 for i, k in enumerate(prev_order)}
 
-    # Month containing this week's Monday (approx via week_start)
+    # For each prior active week, build full rank tables so we can look up
+    # an item's rank the last time it appeared
+    week_rank_tables = {}
+    for wk in active_weeks:
+        spends = {k: item_week_spend[k].get(wk, 0.0) for k in item_week_spend}
+        spends = {k: v for k, v in spends.items() if v > 0}
+        order = sorted(spends.keys(), key=lambda k: -spends[k])
+        week_rank_tables[wk] = {k: i + 1 for i, k in enumerate(order)}
+
     month_key = None
-    ws = weekly[week_key].get("week_start")
-    if ws and len(ws) >= 7:
-        month_key = ws[:7]
+    ws = weekly.get(week_key, {}).get("week_start")
+    if ws and len(str(ws)) >= 7:
+        month_key = str(ws)[:7]
 
     rankings = []
     for key in cur_order[:top_n]:
@@ -761,13 +803,11 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
         trips_life = len(ld["trips"])
         trips_week = len(wd["trips"])
         avg_qty = round(ld["qty"] / trips_life, 2) if trips_life else 0.0
-        # avg unit price this week
         avg_unit = (
             round(sum(wd["unit_prices"]) / len(wd["unit_prices"]), 2)
             if wd["unit_prices"]
             else None
         )
-        # price movement: last vs first recorded unit price
         price_delta = None
         ups = sorted(ld["unit_prices"], key=lambda x: x[0])
         if len(ups) >= 2 and ups[0][1] and ups[-1][1]:
@@ -776,7 +816,15 @@ def get_weekly_item_rankings(week_key: str, top_n: int = 15):
         month_spend = ld["month_spend"].get(month_key, 0.0) if month_key else 0.0
 
         cr = cur_rank.get(key)
-        pr = prev_rank.get(key)
+        # Previous rank = rank in the most recent prior active week where
+        # this item was bought (so trend isn't always NEW after a quiet week)
+        pr = None
+        if week_key in active_weeks:
+            my_idx = active_weeks.index(week_key)
+            for prior in reversed(active_weeks[:my_idx]):
+                if key in week_rank_tables.get(prior, {}):
+                    pr = week_rank_tables[prior][key]
+                    break
         rank_delta = (pr - cr) if (pr is not None and cr is not None) else None
 
         rankings.append({
@@ -955,14 +1003,18 @@ def get_top_item_sparklines(top_n: int = 6, max_weeks: int = 8):
 
     ranked = sorted(totals.items(), key=lambda kv: -kv[1])[:top_n]
     out = []
+    n_weeks = max(len(week_keys), 1)
     for key, total in ranked:
+        series = series_map[key]
+        avg_week = round(sum(series) / n_weeks, 2)
         n_months = len(months_seen.get(key) or []) or 1
         out.append({
             "item_key": key,
             "name": names.get(key, key),
             "total_spend": total,
+            "avg_per_week": avg_week,
             "avg_per_month": round(total / n_months, 2),
             "weeks": labels,
-            "series": series_map[key],
+            "series": series,
         })
     return out

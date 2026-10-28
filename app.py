@@ -482,20 +482,29 @@ if page == "Dashboard":
                 for col, wk in zip(cols, row_keys):
                     payload = weekly[wk]
                     by_store = payload.get("by_store") or {}
-                    if not by_store:
-                        continue
                     with col:
-                        names = [datastore.display_store(s) for s in by_store.keys()]
-                        vals = list(by_store.values())
+                        if by_store:
+                            names = [
+                                datastore.display_store(s) for s in by_store.keys()
+                            ]
+                            vals = list(by_store.values())
+                            colors = _pie_colors_for(by_store)
+                        else:
+                            # Placeholder so empty weeks stay aligned with bars
+                            names, vals, colors = ["—"], [1], ["#1a2332"]
                         fig_p = go.Figure(
                             data=[
                                 go.Pie(
                                     labels=names,
                                     values=vals,
                                     hole=0.5,
-                                    marker=dict(colors=_pie_colors_for(by_store)),
+                                    marker=dict(colors=colors),
                                     textinfo="none",
-                                    hovertemplate="%{label}: $%{value:.2f}<extra></extra>",
+                                    hovertemplate=(
+                                        "%{label}: $%{value:.2f}<extra></extra>"
+                                        if by_store
+                                        else "No trips<extra></extra>"
+                                    ),
                                 )
                             ]
                         )
@@ -688,35 +697,62 @@ if page == "Dashboard":
                 fig_b.update_yaxes(gridcolor="#1a2332")
                 st.plotly_chart(fig_b, use_container_width=True, config=CHART_CONFIG)
 
-    # Cumulative spend within selected month
-    cum = datastore.get_cumulative_month_spend(selected)
-    if cum:
-        fig_c = go.Figure()
-        fig_c.add_trace(
-            go.Scatter(
-                x=[r["date"] for r in cum],
-                y=[r["cumulative"] for r in cum],
-                mode="lines+markers",
-                line=dict(color="#00c8ff", width=2),
-                marker=dict(size=6, color="#00c8ff"),
-                fill="tozeroy",
-                fillcolor="rgba(0,200,255,0.08)",
-                hovertemplate="%{x}<br>Cumulative: $%{y:.2f}<extra></extra>",
+    # Cumulative spend: previous month + selected month side by side
+    prev_month_for_cum = _prev_month_key(selected)
+    cum_prev = datastore.get_cumulative_month_spend(prev_month_for_cum)
+    cum_cur = datastore.get_cumulative_month_spend(selected)
+    if cum_prev or cum_cur:
+        c_prev, c_cur = st.columns(2)
+
+        def _cum_fig(rows, title, color):
+            fig = go.Figure()
+            if rows:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[r["date"] for r in rows],
+                        y=[r["cumulative"] for r in rows],
+                        mode="lines+markers",
+                        line=dict(color=color, width=2),
+                        marker=dict(size=5, color=color),
+                        fill="tozeroy",
+                        fillcolor="rgba(0,200,255,0.08)"
+                        if color == "#00c8ff"
+                        else "rgba(91,141,239,0.08)",
+                        hovertemplate="%{x}<br>Cumulative: $%{y:.2f}<extra></extra>",
+                    )
+                )
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                height=240,
+                title=dict(text=title, font=dict(color="#e8edf2", size=13)),
+                yaxis_title="USD",
+                xaxis_title="",
+                margin=dict(t=40, b=32, l=40, r=16),
             )
-        )
-        fig_c.update_layout(
-            **PLOTLY_LAYOUT,
-            height=280,
-            title=dict(
-                text=f"Cumulative spend · {_month_label(selected)}",
-                font=dict(color="#e8edf2"),
-            ),
-            yaxis_title="USD",
-            xaxis_title="",
-        )
-        fig_c.update_xaxes(gridcolor="#1a2332")
-        fig_c.update_yaxes(gridcolor="#1a2332")
-        st.plotly_chart(fig_c, use_container_width=True, config=CHART_CONFIG)
+            fig.update_xaxes(gridcolor="#1a2332", tickfont=dict(size=9))
+            fig.update_yaxes(gridcolor="#1a2332")
+            return fig
+
+        with c_prev:
+            st.plotly_chart(
+                _cum_fig(
+                    cum_prev,
+                    f"Cumulative · {_month_label(prev_month_for_cum)}",
+                    "#5b8def",
+                ),
+                use_container_width=True,
+                config=CHART_CONFIG,
+            )
+        with c_cur:
+            st.plotly_chart(
+                _cum_fig(
+                    cum_cur,
+                    f"Cumulative · {_month_label(selected)}",
+                    "#00c8ff",
+                ),
+                use_container_width=True,
+                config=CHART_CONFIG,
+            )
 
     # Top-N item sparklines (last 8 weeks)
     st.markdown(
@@ -756,8 +792,8 @@ if page == "Dashboard":
                     title=dict(
                         text=(
                             f"{item['name']}  ·  "
-                            f"${item['total_spend']:.2f} total  ·  "
-                            f"${item.get('avg_per_month', 0):.2f}/mo"
+                            f"${item.get('avg_per_week', 0):.2f}/wk  ·  "
+                            f"${item['total_spend']:.2f} All Time"
                         ),
                         font=dict(size=11, color="#a8b8c8"),
                     ),
@@ -814,22 +850,35 @@ elif page == "Shopping List":
     # ---- Weekly item rankings (between frequency list and all frequencies) ----
     st.markdown("---")
     st.markdown(
-        '<div class="section-label">Weekly item rankings</div>',
+        """
+<div style="background:linear-gradient(145deg,#0f1a28 0%,#0c1520 100%);
+border:1px solid #1e3a5f;border-radius:8px;padding:1rem 1.1rem 0.75rem 1.1rem;
+margin-bottom:0.5rem;">
+<div style="font-size:0.68rem;text-transform:uppercase;letter-spacing:0.14em;
+color:#00c8ff;font-weight:600;margin-bottom:0.25rem;">Poll · weekly rankings</div>
+<div style="font-size:1.35rem;font-weight:700;color:#f0f4f8;letter-spacing:-0.02em;">
+Top items by week</div>
+<div style="font-size:0.8rem;color:#7a8a9a;margin-top:0.2rem;">
+Ranked by <strong style="color:#c8d0da;">spend that week</strong> (highest $ = #1).
+Trend vs the last week you bought that item — not empty gap weeks.
+</div>
+</div>
+""",
         unsafe_allow_html=True,
     )
-    st.subheader("Top items by week")
 
     week_keys = datastore.get_available_weeks()
     if not week_keys:
         st.caption("No weekly data yet.")
     else:
-        # Default to most recent week
         default_idx = len(week_keys) - 1
         selected_week = st.selectbox(
             "Week",
             options=week_keys,
             index=default_idx,
-            format_func=lambda k: datastore.get_weekly_spending(max_weeks=None)
+            format_func=lambda k: datastore.get_weekly_spending(
+                max_weeks=None, fill_gaps=False
+            )
             .get(k, {})
             .get("label", k),
             key="rank_week_select",
@@ -838,7 +887,7 @@ elif page == "Shopping List":
         ranks = ranking_payload["rankings"]
         prev_lbl = ranking_payload.get("previous_label")
         if prev_lbl:
-            st.caption(f"Compared to {prev_lbl}")
+            st.caption(f"Prior shopping week in poll: {prev_lbl}")
 
         if not ranks:
             st.caption("No items in this week.")
