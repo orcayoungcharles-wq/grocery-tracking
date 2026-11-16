@@ -105,6 +105,11 @@ def set_user(name: str) -> str:
     _current_user = slug
     _refresh_paths()
     _ensure_data_dir()
+    # Auto-restore from committed seed when local data was wiped (Cloud sleep).
+    try:
+        ensure_seed_loaded()
+    except Exception:
+        pass
     return slug
 
 
@@ -522,7 +527,6 @@ def get_receipts_in_month(month_key: str):
 
 def get_item_movers(month_key: str | None = None, top_n: int = 8):
     from collections import defaultdict
-    from datetime import datetime as dt
     history = load_item_history()
     if not history:
         return {"top": [], "rising": [], "falling": []}
@@ -660,3 +664,16 @@ def get_top_item_sparklines(top_n: int = 6, max_weeks: int = 8):
             "series": series,
         })
     return out
+
+
+def get_available_months():
+    spending = get_monthly_spending()
+    return sorted(spending.keys())
+
+
+def get_month_data(month_key: str):
+    spending = get_monthly_spending()
+    d = spending.get(month_key, {"total": 0.0, "by_store": {}})
+    if "total" not in d and "food" in d:
+        d = {**d, "total": d["food"]}
+    return d
